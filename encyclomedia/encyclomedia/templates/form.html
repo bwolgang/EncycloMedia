@@ -29,7 +29,18 @@
   .cands button { width: 100%; text-align: left; display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: center; }
   .cands img, .cands .ph { width: 40px; height: 54px; object-fit: cover; border-radius: 3px; background: var(--line); }
   .cands small { color: var(--muted); display: block; }
-  .cover-big { width: 100%; max-height: 360px; object-fit: contain; border-radius: 8px; margin-bottom: 12px; }
+  .side { display: grid; gap: 16px; }
+  .dropzone { position: relative; aspect-ratio: 2 / 3; border: 2px dashed var(--line); border-radius: 10px;
+              display: flex; align-items: center; justify-content: center; cursor: pointer; overflow: hidden;
+              background: var(--bg); margin: 10px 0; transition: border-color .15s, background .15s; }
+  .dropzone:hover, .dropzone:focus-visible, .dropzone.over { border-color: var(--accent); outline: none; }
+  .dropzone.over { background: var(--chip); }
+  .dropzone img { width: 100%; height: 100%; object-fit: cover; }
+  .dz-empty { text-align: center; color: var(--muted); font-size: 13px; line-height: 1.5; padding: 12px; }
+  .dz-empty span { display: block; font-size: 32px; line-height: 1; margin-bottom: 6px; color: var(--accent); }
+  .cover-actions { display: flex; gap: 8px; }
+  .cover-actions button { flex: 1; }
+  .tiny { font-size: 12px; margin: 8px 0 0; }
   .msg { font-size: 13px; margin-top: 10px; }
   @media (max-width: 780px) { .layout { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
 </style>
@@ -37,8 +48,11 @@
 {% block content %}
 <div class="layout">
 <div class="panel">
-  <h1>{{ 'Edit item' if item.id else 'Add item' }}</h1>
-  <form method="post" id="itemForm">
+  {% if item.id %}<h1>Edit details</h1>
+  {% elif item.copy_of %}<h1>Add another copy</h1>
+  <p class="muted" style="margin:-8px 0 14px;font-size:14px">Copied from “{{ item.copy_of }}”. Change what's different about this copy (edition, format, ISBN…), then save.</p>
+  {% else %}<h1>Add item</h1>{% endif %}
+  <form method="post" id="itemForm" enctype="multipart/form-data">
     <div class="typepick">
       {% for t in MEDIA_TYPES %}
         <label class="t-{{ t }}"><input type="radio" name="media_type" value="{{ t }}" {{ 'checked' if item.media_type == t }}> {{ t|capitalize }}</label>
@@ -67,7 +81,7 @@
     <fieldset class="extra" data-type="{{ t }}" style="border:0;padding:0;margin:0">
       <h2>{{ t|capitalize }} details</h2>
       <div class="grid">
-        {% for f in EXTRA_FIELDS[t] %}
+        {% for f in EXTRA_FIELDS[t] if f != 'cover_url' %}
           {% set val = item.extra.get(f, '') if item.media_type == t else '' %}
           <label class="{{ 'full' if f in ('tracklist', 'cast', 'cover_url') }}">{{ label(f) }}
             {% if f == 'tracklist' %}<textarea name="extra__{{ f }}">{{ val }}</textarea>
@@ -83,18 +97,40 @@
 
     <div class="actions">
       <button class="primary" type="submit">{{ 'Save' if item.id else 'Add to catalog' }}</button>
-      <a class="btn" href="{{ url_for('index') }}">Back</a>
+      <a class="btn" href="{{ url_for('item', item_id=item.id) if item.id else url_for('index') }}">Cancel</a>
     </div>
   </form>
   {% if item.id %}
-  <form method="post" action="{{ url_for('delete', item_id=item.id) }}" onsubmit="return confirm('Delete this item?')" style="margin-top:10px">
+  <form method="post" action="{{ url_for('delete', item_id=item.id) }}" data-msg="Delete “{{ item.title }}” from your catalog? This can't be undone." onsubmit="return confirm(this.dataset.msg)" style="margin-top:10px">
     <button class="danger" type="submit">Delete item</button>
   </form>
   {% endif %}
 </div>
 
-<aside class="panel">
-  {% if item.extra and item.extra.cover_url %}<img class="cover-big" src="{{ item.extra.cover_url }}" alt="" onerror="this.remove()">{% endif %}
+{% set cover_url = (item.extra or {}).get('cover_url') or '' %}
+<aside class="side">
+<div class="panel">
+  <b>Cover</b>
+  <div class="dropzone" id="coverDrop" tabindex="0" role="button" aria-label="Upload a cover image">
+    <img id="coverPreview" alt="Cover preview" {% if cover_url %}src="{{ cover_url }}"{% else %}hidden{% endif %}>
+    <div class="dz-empty" id="coverEmpty" {{ 'hidden' if cover_url }}>
+      <span>＋</span>Drop an image here<br>or click to choose one
+    </div>
+  </div>
+  <input type="file" name="cover_file" id="coverFile" form="itemForm" hidden
+         accept="image/jpeg,image/png,image/webp,image/gif">
+  <input type="hidden" name="cover_url" id="coverUrl" form="itemForm" value="{{ cover_url }}">
+  <div class="cover-actions">
+    <button type="button" id="coverChoose">Upload image</button>
+    <button type="button" id="coverRemove" class="danger" {{ 'hidden' if not cover_url }}>Remove</button>
+  </div>
+  <label style="margin-top:10px">…or paste an image link
+    <input id="coverLink" placeholder="https://…" value="{{ '' if cover_url.startswith('/covers/') else cover_url }}">
+  </label>
+  <p class="muted tiny" id="coverHint">JPG, PNG, WebP or GIF up to 20 MB. Phone photos are rotated and resized automatically.</p>
+</div>
+
+<div class="panel">
   <b>Auto-fill from online databases</b>
   <p class="muted" style="font-size:13px;margin:4px 0 10px">Type a title, or an ISBN / barcode for books and music, then pick a match.</p>
   <div class="lookup-row">
@@ -103,6 +139,7 @@
   </div>
   <div class="msg muted" id="lookupMsg"></div>
   <ul class="cands" id="cands"></ul>
+</div>
 </aside>
 </div>
 
@@ -210,7 +247,48 @@ function fill(c) {
     const el = form.querySelector(`fieldset[data-type="${c.media_type}"] [name="extra__${k}"]`);
     if (el) el.value = v;
   }
+  if (c.extra && c.extra.cover_url && !coverFile.files.length) setCoverUrl(c.extra.cover_url);
   document.getElementById('lookupMsg').textContent = `Filled from ${c.source}. Review, then save.`;
 }
+
+// ---- cover image ------------------------------------------------------------
+const coverFile = document.getElementById('coverFile'), coverUrl = document.getElementById('coverUrl');
+const coverLink = document.getElementById('coverLink'), coverPreview = document.getElementById('coverPreview');
+const coverDrop = document.getElementById('coverDrop'), coverHint = document.getElementById('coverHint');
+const MAX_BYTES = 20 * 1024 * 1024, DEFAULT_HINT = coverHint.textContent;
+
+function showPreview(src) {
+  coverPreview.hidden = !src;
+  if (src) coverPreview.src = src; else coverPreview.removeAttribute('src');
+  document.getElementById('coverEmpty').hidden = !!src;
+  document.getElementById('coverRemove').hidden = !src;
+}
+function setCoverUrl(url) {
+  coverUrl.value = url;
+  coverLink.value = url.startsWith('/covers/') ? '' : url;
+  showPreview(url);
+}
+function useFile(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { coverHint.textContent = 'That file isn\'t an image.'; return; }
+  if (file.size > MAX_BYTES) { coverHint.textContent = 'That image is over 20 MB.'; return; }
+  const dt = new DataTransfer(); dt.items.add(file); coverFile.files = dt.files;
+  showPreview(URL.createObjectURL(file));
+  coverHint.textContent = `“${file.name}” will be saved when you click ${form.querySelector('button.primary').textContent.trim()}.`;
+}
+coverPreview.addEventListener('error', () => { if (coverPreview.src) showPreview(''); });
+coverFile.addEventListener('change', () => useFile(coverFile.files[0]));
+document.getElementById('coverChoose').addEventListener('click', () => coverFile.click());
+coverDrop.addEventListener('click', () => coverFile.click());
+coverDrop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); coverFile.click(); } });
+for (const ev of ['dragenter', 'dragover']) coverDrop.addEventListener(ev, e => { e.preventDefault(); coverDrop.classList.add('over'); });
+for (const ev of ['dragleave', 'drop']) coverDrop.addEventListener(ev, () => coverDrop.classList.remove('over'));
+coverDrop.addEventListener('drop', e => { e.preventDefault(); useFile(e.dataTransfer.files[0]); });
+document.getElementById('coverRemove').addEventListener('click', () => {
+  coverFile.value = ''; setCoverUrl(''); coverHint.textContent = DEFAULT_HINT;
+});
+coverLink.addEventListener('change', () => {
+  coverFile.value = ''; setCoverUrl(coverLink.value.trim()); coverHint.textContent = DEFAULT_HINT;
+});
 </script>
 {% endblock %}

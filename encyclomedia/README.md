@@ -38,6 +38,31 @@ printing of a 1937 novel or a 2019 vinyl reissue. An ISBN or barcode lookup fill
 All four also have `cover_url`. To add a field, add its name to `EXTRA_FIELDS` in `catalog.py`.
 The form, CSV import/export and search pick it up automatically.
 
+### Item pages
+Clicking an item in the catalog opens its **details page**, which shows the cover, credits, every saved field,
+the cast or track list, tags and notes. From there you can:
+- **Edit details**: opens the edit form at `/item/<id>/edit`. Saving returns you to the catalog.
+- **Add another copy**: opens the add form pre-filled with this item's details, for a second edition,
+  format or platform. Nothing is saved until you submit the form.
+- **View on Open Library / MusicBrainz / TMDB / IGDB**: opens the item on the matching site. Books with an
+  ISBN go straight to that edition's page.
+- **Delete** (asks you to confirm first).
+- **Browse related items**: click a genre, tag, cast member or the creator to search your catalog.
+  **More like this** lists related items, based on the same creator, related titles (the Dune novel ↔
+  the Dune films), shared genres and tags, and similar subject matter when semantic search is on.
+
+### Cover images
+Each item can have a cover, either fetched by auto-fill or uploaded by you. A photo of your own copy works well.
+- **Edit form:** use the **Cover** panel. Click **Upload image** or drop a file onto the box, and the preview
+  updates immediately. You can also paste an image link, or click **Remove**.
+- **Details page:** click **Add a cover image** / **Change cover**, or drop an image straight onto the cover.
+- JPG, PNG, WebP and GIF files up to 20 MB are accepted. Files are checked by their content, not their name.
+  With Pillow installed, phone photos are turned the right way up and shrunk to at most 1200×1800.
+- Uploads are stored in a folder next to your database: `~/.encyclomedia_covers/` for the default catalog, or
+  `demo_covers/` for `--db demo.db`. Replaced and removed covers are deleted automatically. A cover shared by
+  an item and its copy is kept until neither of them uses it.
+- Back up that folder along with your `.db` file. CSV exports record uploaded covers as `/covers/<file>`.
+
 ### Genres
 An item can have any number of genres. Swimming can be both **Hip-Hop** and **Jazz rap**, for example.
 

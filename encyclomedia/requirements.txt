@@ -1,5 +1,7 @@
 flask>=3.0
 numpy>=1.26
+# Resizes and auto-rotates uploaded cover photos (uploads still work without it, just unprocessed)
+pillow>=10.0
 # Optional: meaning-based (semantic) search. Remove this line to keep keyword search only.
 sentence-transformers>=3.0
 # For running the tests

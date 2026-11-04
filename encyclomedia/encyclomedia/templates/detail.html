@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} · EncycloMedia{% endblock %}
+{% block head %}
+<style>
+  .crumbs { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .crumbs a { color: var(--muted); }
+  .detail { display: grid; grid-template-columns: 280px 1fr; gap: 32px; align-items: start; }
+  .cover { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 10px;
+           background: var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.12); display: block; }
+  .cover.placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center;
+                       gap: 6px; background: var(--panel); border: 1px solid var(--line); box-shadow: none; }
+  .cover.placeholder[hidden] { display: none; }
+  .cover.placeholder span { font-family: Georgia, serif; font-size: 96px; line-height: 1; }
+  .cover.placeholder small { text-transform: uppercase; letter-spacing: 1.5px; font-size: 12px; color: var(--muted); }
+  .cover.placeholder { cursor: pointer; }
+  .cover-col.over .cover { outline: 3px dashed var(--accent); outline-offset: 4px; }
+  .cover-tools { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 6px; margin-top: 10px; font-size: 13px; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline;
+             font: inherit; display: inline; }
+  .drop-hint { width: 100%; text-align: center; font-size: 12px; }
+  .actions { display: grid; gap: 8px; margin-top: 16px; }
+  .actions .btn, .actions button { width: 100%; text-align: center; }
+  .actions form { margin: 0; }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-size: 34px; line-height: 1.15; margin: 10px 0 6px; }
+  .credit { font-size: 17px; margin: 0 0 12px; }
+  .credit a { color: inherit; text-decoration-color: var(--line); }
+  .credit a:hover { color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0; margin: 0 0 24px;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .facts dt, .facts dd { margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  .facts dt { color: var(--muted); font-size: 13px; padding-right: 24px; }
+  .facts dt:last-of-type, .facts dd:last-of-type { border-bottom: 0; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
+  section { margin-bottom: 24px; }
+  .people { display: flex; flex-wrap: wrap; gap: 6px; }
+  .people .chip { font-size: 13px; padding: 2px 11px; }
+  ol.tracks { margin: 0; padding: 0; list-style: none; counter-reset: t; columns: 2; column-gap: 32px; }
+  ol.tracks li { counter-increment: t; padding: 5px 0; border-bottom: 1px dashed var(--line); break-inside: avoid; }
+  ol.tracks li::before { content: counter(t) "."; display: inline-block; width: 28px; color: var(--muted);
+                         font-variant-numeric: tabular-nums; }
+  .notes { white-space: pre-wrap; background: var(--panel); border-left: 3px solid var(--accent);
+           padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 0; }
+  .stamp { font-size: 12px; color: var(--muted); }
+  .related { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .rel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+  .rel { display: grid; grid-template-columns: 48px 1fr; gap: 12px; align-items: center; padding: 8px 12px;
+         background: var(--panel); border: 1px solid var(--line); border-radius: 10px; text-decoration: none; color: inherit; }
+  .rel:hover { border-color: var(--accent); }
+  .rel .thumb { width: 48px; height: 64px; border-radius: 4px; object-fit: cover; background: var(--line);
+                display: flex; align-items: center; justify-content: center; font-family: Georgia, serif;
+                font-size: 22px; color: var(--muted); }
+  .rel b { display: block; font-size: 14px; line-height: 1.3; margin-top: 3px; }
+  .rel small { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  @media (max-width: 720px) {
+    .detail { grid-template-columns: 1fr; gap: 20px; }
+    .cover-col { display: grid; grid-template-columns: 140px 1fr; gap: 14px; align-items: start; }
+    .actions { margin-top: 0; }
+    h1 { font-size: 28px; }
+    ol.tracks { columns: 1; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+{% set t = item.media_type %}
+<nav class="crumbs">
+  <a href="{{ url_for('index') }}">Catalog</a> ›
+  <a href="{{ url_for('index', type=t) }}">{{ 'Music' if t == 'music' else t|capitalize ~ 's' }}</a> ›
+  {{ item.title }}
+</nav>
+
+<article class="detail">
+  <div class="cover-col">
+    {% if item.extra.cover_url %}
+      <img class="cover" src="{{ item.extra.cover_url }}" alt="Cover of {{ item.title }}"
+           onerror="this.hidden = true; this.nextElementSibling.hidden = false">
+    {% endif %}
+    <div class="cover placeholder t-{{ t }}" {{ 'hidden' if item.extra.cover_url }}
+         role="button" tabindex="0" title="Add a cover image" onclick="document.getElementById('quickCover').click()">
+      <span>{{ item.title[:1] }}</span><small>{{ t }}</small>
+    </div>
+
+    <form class="cover-tools" method="post" action="{{ url_for('upload_cover', item_id=item.id) }}"
+          enctype="multipart/form-data" id="coverForm">
+      <label class="linkish">{{ 'Change cover' if item.extra.cover_url else 'Add a cover image' }}
+        <input type="file" name="cover_file" id="quickCover" hidden
+               accept="image/jpeg,image/png,image/webp,image/gif" onchange="this.form.submit()">
+      </label>
+      {% if item.extra.cover_url %}
+        <span class="muted">·</span>
+        <button class="linkish" type="submit" form="removeCover">Remove</button>
+      {% endif %}
+      <span class="muted drop-hint">or drop an image on the cover</span>
+    </form>
+    <form id="removeCover" method="post" action="{{ url_for('remove_cover', item_id=item.id) }}"
+          data-msg="Remove the cover image?" onsubmit="return confirm(this.dataset.msg)" hidden></form>
+
+    <div class="actions">
+      <a class="btn primary" href="{{ url_for('edit', item_id=item.id) }}">Edit details</a>
+      <a class="btn" href="{{ url_for('add', copy=item.id) }}" title="Same details, ready to change for another edition or format">Add another copy</a>
+      {% for name, url in links %}
+        <a class="btn" href="{{ url }}" target="_blank" rel="noopener">View on {{ name }} ↗</a>
+      {% endfor %}
+      <form method="post" action="{{ url_for('delete', item_id=item.id) }}"
+            data-msg="Delete “{{ item.title }}” from your catalog? This can't be undone."
+            onsubmit="return confirm(this.dataset.msg)">
+        <button class="danger" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="info">
+    <span class="pill t-{{ t }}">{{ t }}</span>
+    <h1>{{ item.title }}</h1>
+    {% if item.creator %}
+      <p class="credit">{{ CREDIT_PHRASE[t] }} <a href="{{ url_for('index', q=item.creator) }}" title="Everything by {{ item.creator }}">{{ item.creator }}</a></p>
+    {% endif %}
+
+    {% if item.genres %}
+      <div class="chips">
+        {% for g in item.genres %}<a class="chip" href="{{ url_for('index', genre=g) }}">{{ g }}</a>{% endfor %}
+      </div>
+    {% endif %}
+
+    {% if details %}
+      <dl class="facts">
+        {% for k, v in details %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}
+      </dl>
+    {% endif %}
+
+    {% if item.extra.cast %}
+      <section>
+        <h2>Cast</h2>
+        <div class="people">
+          {% for person in split_list(item.extra.cast, ',') %}
+            <a class="chip" href="{{ url_for('index', q=person) }}" title="Search your catalog for {{ person }}">{{ person }}</a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if item.extra.tracklist %}
+      <section>
+        <h2>Track list</h2>
+        <ol class="tracks">
+          {% for track in split_list(item.extra.tracklist, ';') %}<li>{{ track }}</li>{% endfor %}
+        </ol>
+      </section>
+    {% endif %}
+
+    {% if item.tags %}
+      <section>
+        <h2>Tags</h2>
+        <div class="people">
+          {% for tag in split_list(item.tags, ',') %}<a class="chip" href="{{ url_for('index', q=tag) }}">{{ tag }}</a>{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if item.notes %}
+      <section>
+        <h2>Notes</h2>
+        <p class="notes">{{ item.notes }}</p>
+      </section>
+    {% endif %}
+
+    <p class="stamp">
+      Added {{ (item.added_at or '')[:10] }}{% if item.updated_at %} · Last edited {{ item.updated_at[:10] }}{% endif %}
+    </p>
+  </div>
+</article>
+
+{% if related %}
+<section class="related">
+  <h2>More like this</h2>
+  <div class="rel-grid">
+    {% for r in related %}
+      <a class="rel" href="{{ url_for('item', item_id=r.id) }}">
+        {% if r.extra.cover_url %}<img class="thumb" src="{{ r.extra.cover_url }}" alt="" loading="lazy" onerror="this.removeAttribute('src')">
+        {% else %}<div class="thumb">{{ r.title[:1] }}</div>{% endif %}
+        <span>
+          <span class="pill t-{{ r.media_type }}" style="font-size:10px">{{ r.media_type }}</span>
+          <b>{{ r.title }}</b>
+          <small>{{ r.reason }}</small>
+        </span>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+<script>
+// Drag an image file onto the cover to replace it.
+(() => {
+  const col = document.querySelector('.cover-col'), input = document.getElementById('quickCover');
+  for (const ev of ['dragenter', 'dragover']) col.addEventListener(ev, e => { e.preventDefault(); col.classList.add('over'); });
+  for (const ev of ['dragleave', 'drop']) col.addEventListener(ev, () => col.classList.remove('over'));
+  col.addEventListener('drop', e => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files;
+    input.form.submit();
+  });
+})();
+</script>
+{% endblock %}

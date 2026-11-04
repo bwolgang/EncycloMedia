@@ -274,7 +274,7 @@ def test_web_add_edit_delete(client):
     item_id = client.get("/api/search?q=celeste").get_json()["results"][0]["id"]
     item_url = f"/item/{item_id}"
     assert "Celeste" in client.get(item_url).get_data(as_text=True)
-    resp = client.post(item_url, data={"media_type": "game", "title": "Celeste", "extra__platform": "Steam Deck"})
+    resp = client.post(item_url + "/edit", data={"media_type": "game", "title": "Celeste", "extra__platform": "Steam Deck"})
     assert resp.headers["Location"] == "/" and "Saved “Celeste”." in client.get("/").get_data(as_text=True)
     assert client.get("/api/search?q=steam deck").get_json()["results"][0]["title"] == "Celeste"
     client.post(item_url + "/delete")
@@ -418,3 +418,187 @@ def test_year_labels_and_edition_year_field(cat):
                               "extra__edition_year": "2012", "extra__isbn": "9780547928227"})
     hobbit = cat.search("hobbit")[0]
     assert hobbit["year"] == 1937 and hobbit["extra"]["edition_year"] == "2012"
+
+
+# --------------------------------------------------------------------------- details page
+def test_details_page_shows_everything_saved(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    dune2 = cat.search("part two")[0]
+    cat.update(dune2["id"], genre="Science fiction, Adventure", tags="desert, sequel", notes="Steelbook edition",
+               extra={**dune2["extra"], "cover_url": "https://img/dune2.jpg", "rating": "PG-13"})
+    page = client.get(f"/item/{dune2['id']}").get_data(as_text=True)
+    for expected in ("Dune: Part Two", "Directed by", "Denis Villeneuve", "Release year", "2024",
+                     "https://img/dune2.jpg", "166 min", "PG-13", "4K" if False else "Blu-ray",
+                     ">Timothée Chalamet<", ">Zendaya<", "Science fiction", "Steelbook edition",
+                     "Edit details", "Add another copy", "View on TMDB", "Delete"):
+        assert expected in page, expected
+    assert 'name="title"' not in page  # read-only, not the edit form
+    # Edit form lives at /edit and its Cancel goes back to the details page.
+    edit_page = client.get(f"/item/{dune2['id']}/edit").get_data(as_text=True)
+    assert 'name="title"' in edit_page and f'href="/item/{dune2["id"]}">Cancel' in edit_page
+
+
+def test_details_page_track_list_and_book_link(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    abbey = cat.search("abbey road")[0]
+    page = client.get(f"/item/{abbey['id']}").get_data(as_text=True)
+    assert "<li>Come Together</li>" in page and "<li>Here Comes the Sun</li>" in page
+    dune = cat.search("9780441013593")[0]
+    page = client.get(f"/item/{dune['id']}").get_data(as_text=True)
+    assert "https://openlibrary.org/isbn/9780441013593" in page and "First published" in page
+    assert client.get("/item/9999").status_code == 404
+
+
+def test_add_another_copy_prefills_without_saving(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    dune = cat.search("9780441013593")[0]
+    before = len(cat.list())
+    page = client.get(f"/add?copy={dune['id']}").get_data(as_text=True)
+    assert "Add another copy" in page and 'value="Frank Herbert"' in page and "9780441013593" in page
+    assert len(cat.list()) == before  # nothing saved until the form is submitted
+
+
+def test_more_like_this(cat):
+    dune = cat.search("9780441013593")[0]
+    related = cat.similar(dune["id"])
+    assert related[0]["title"] == "Dune: Part Two" and "Related title" in related[0]["reason"]
+    mythos = cat.search("mythos")[0]
+    assert cat.similar(mythos["id"]) == []  # nothing in common with anything -> nothing listed
+    cat.update(mythos["id"], tags="greek mythology")
+    assert [(r["title"], r["reason"]) for r in cat.similar(mythos["id"])] == [("Hades", "Tagged greek mythology")]
+    cat.add("book", "Children of Dune", creator="Frank Herbert")
+    reasons = {r["title"]: r["reason"] for r in cat.similar(dune["id"])}
+    assert reasons["Children of Dune"].startswith("Also by Frank Herbert")
+
+
+def test_more_like_this_uses_meaning_when_available(semantic_cat):
+    foundation = semantic_cat.search("foundation")[0]
+    semantic_cat.add("movie", "Interstellar", notes="space travel through a wormhole near a distant planet")
+    related = semantic_cat.similar(foundation["id"])
+    assert [r["title"] for r in related] == ["Interstellar"] and related[0]["reason"] == "Similar subject"
+
+
+# --------------------------------------------------------------------------- cover uploads
+from encyclomedia import covers  # noqa: E402
+
+
+def make_image(fmt="JPEG", size=(400, 600), color=(200, 120, 40), mode="RGB", exif_orientation=None):
+    from PIL import Image
+    img = Image.new(mode, size, color)
+    out = io.BytesIO()
+    kwargs = {}
+    if exif_orientation:
+        exif = Image.Exif()
+        exif[0x0112] = exif_orientation  # Orientation tag
+        kwargs["exif"] = exif
+    img.save(out, fmt, **kwargs)
+    return out.getvalue()
+
+
+def test_prepare_rejects_non_images():
+    for bad in (b"", b"just some text pretending to be a jpg", b"%PDF-1.7 ..."):
+        with pytest.raises(covers.CoverError):
+            covers.prepare(bad)
+    with pytest.raises(covers.CoverError, match="damaged"):
+        covers.prepare(b"\xff\xd8\xff" + b"\x00" * 100)  # JPEG header, garbage body
+
+
+def test_prepare_resizes_and_rotates_phone_photos():
+    from PIL import Image
+    # A 4000x3000 photo taken with the phone turned sideways (EXIF orientation 6 = rotate 90°).
+    data, ext = covers.prepare(make_image(size=(4000, 3000), exif_orientation=6))
+    with Image.open(io.BytesIO(data)) as img:
+        assert ext == "jpg" and img.size[0] < img.size[1]          # now portrait, the right way up
+        assert img.size[0] <= 1200 and img.size[1] <= 1800         # shrunk
+    data, ext = covers.prepare(make_image("PNG", mode="RGBA", color=(0, 0, 0, 0)))
+    assert ext == "png"                                            # transparency kept
+    gif = make_image("GIF", mode="P", color=1)
+    assert covers.prepare(gif) == (gif, "gif")                    # left alone (may be animated)
+
+
+def test_cover_files_are_created_replaced_and_cleaned_up(cat):
+    hades = cat.search("hades")[0]
+    url1 = cat.set_cover_image(hades["id"], make_image())
+    file1 = cat.covers_dir / url1.rsplit("/", 1)[1]
+    assert url1.startswith("/covers/") and file1.is_file()
+    assert cat.covers_dir.name == "test_covers"                    # next to test.db
+    assert cat.get(hades["id"])["extra"]["cover_url"] == url1
+
+    url2 = cat.set_cover_image(hades["id"], make_image(color=(10, 10, 10)))
+    assert url2 != url1 and not file1.exists()                     # old file deleted on replace
+
+    copy_id = cat.add("game", "Hades (2nd copy)", extra={"cover_url": url2})  # copies can share a file
+    cat.remove(hades["id"])
+    assert cat.cover_file(url2.rsplit("/", 1)[1]) is not None      # still used by the copy
+    assert cat.clear_cover(copy_id)
+    assert cat.cover_file(url2.rsplit("/", 1)[1]) is None          # last user gone -> file gone
+    assert cat.cover_file("../test.db") is None and cat.cover_file("x.exe") is None
+
+
+def test_web_cover_upload_flow(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+
+    # Upload while adding a new item.
+    resp = client.post("/add", content_type="multipart/form-data", data={
+        "media_type": "book", "title": "Leviathan Wakes",
+        "cover_file": (io.BytesIO(make_image()), "photo.jpg")})
+    assert resp.headers["Location"] == "/"
+    book = cat.search("leviathan")[0]
+    url = book["extra"]["cover_url"]
+    img = client.get(url)
+    assert img.status_code == 200 and img.mimetype == "image/jpeg"
+    assert f'src="{url}"' in client.get(f"/item/{book['id']}").get_data(as_text=True)
+
+    # Saving the edit form unchanged keeps the cover; clearing cover_url removes it and its file.
+    form = {"media_type": "book", "title": "Leviathan Wakes", "cover_url": url}
+    client.post(f"/item/{book['id']}/edit", data=form)
+    assert cat.get(book["id"])["extra"]["cover_url"] == url
+    client.post(f"/item/{book['id']}/edit", data={**form, "cover_url": ""})
+    assert "cover_url" not in cat.get(book["id"])["extra"] and client.get(url).status_code == 404
+
+    # Quick upload from the details page; a bad file is refused with a message.
+    resp = client.post(f"/item/{book['id']}/cover", content_type="multipart/form-data",
+                       data={"cover_file": (io.BytesIO(make_image("PNG")), "scan.png")})
+    assert resp.headers["Location"] == f"/item/{book['id']}"
+    quick = cat.get(book["id"])["extra"]["cover_url"]
+    assert quick.startswith("/covers/") and client.get(quick).status_code == 200
+    client.post(f"/item/{book['id']}/cover", content_type="multipart/form-data",
+                data={"cover_file": (io.BytesIO(b"not an image"), "notes.jpg")})
+    page = client.get(f"/item/{book['id']}").get_data(as_text=True)
+    assert "a supported image" in page
+    assert cat.get(book["id"])["extra"]["cover_url"] == quick  # old cover kept
+
+    client.post(f"/item/{book['id']}/cover/remove")
+    assert "cover_url" not in cat.get(book["id"])["extra"]
+
+
+def test_web_bad_upload_on_add_keeps_item_and_reopens_form(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    resp = client.post("/add", content_type="multipart/form-data", data={
+        "media_type": "game", "title": "Celeste", "cover_file": (io.BytesIO(b"oops"), "cover.png")})
+    item = cat.search("celeste")[0]
+    assert resp.headers["Location"] == f"/item/{item['id']}/edit"
+    assert "The cover wasn&#39;t saved" in client.get(resp.headers["Location"]).get_data(as_text=True)
+
+
+def test_web_rejects_oversized_upload(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    app.config["MAX_CONTENT_LENGTH"] = 2000
+    client = app.test_client()
+    dune = cat.search("9780441013593")[0]
+    resp = client.post(f"/item/{dune['id']}/cover", content_type="multipart/form-data",
+                       data={"cover_file": (io.BytesIO(b"x" * 5000), "big.jpg")},
+                       headers={"Referer": f"/item/{dune['id']}"})
+    assert resp.status_code == 302
+    assert "too big" in client.get(f"/item/{dune['id']}").get_data(as_text=True)

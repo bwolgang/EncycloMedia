@@ -22,7 +22,10 @@ import io
 import json
 import re
 import sqlite3
+import uuid
 from pathlib import Path
+
+from . import covers
 
 DB_DEFAULT = Path.home() / ".encyclomedia.db"
 SCHEMA_VERSION = 3
@@ -317,14 +320,65 @@ class Catalog:
         if has_genre:
             self._set_genres(item_id, genres)
         self.conn.commit()
+        if current["extra"].get("cover_url") != extra_clean.get("cover_url"):
+            self._discard_cover(current["extra"].get("cover_url"))
         self._embed_items([item_id])
         return True
 
     def remove(self, item_id) -> bool:
+        current = self.get(item_id)
         cur = self.conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         self._prune_genres()
         self.conn.commit()
+        if current:
+            self._discard_cover(current["extra"].get("cover_url"))
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------------ cover images
+    @property
+    def covers_dir(self) -> Path | None:
+        return covers.covers_dir_for(self.db_path)
+
+    def cover_file(self, filename) -> Path | None:
+        """Path of an uploaded cover, or None if the name isn't one of ours or doesn't exist."""
+        name = covers.filename_from_url(covers.URL_PREFIX + str(filename))
+        if not name or self.covers_dir is None:
+            return None
+        path = self.covers_dir / name
+        return path if path.is_file() else None
+
+    def set_cover_image(self, item_id, data: bytes) -> str:
+        """Store an uploaded image as this item's cover. Raises covers.CoverError for bad files."""
+        item = self.get(item_id)
+        if item is None:
+            raise ValueError(f"No item with id {item_id}")
+        if self.covers_dir is None:
+            raise covers.CoverError("Image uploads need a database file, not an in-memory catalog.")
+        image, ext = covers.prepare(data)
+        self.covers_dir.mkdir(parents=True, exist_ok=True)
+        # A fresh name each time, so browsers never show a stale cached cover.
+        name = f"{item_id}-{uuid.uuid4().hex[:10]}.{ext}"
+        (self.covers_dir / name).write_bytes(image)
+        url = covers.URL_PREFIX + name
+        self.update(item_id, extra={**item["extra"], "cover_url": url})
+        return url
+
+    def clear_cover(self, item_id) -> bool:
+        item = self.get(item_id)
+        if item is None or not item["extra"].get("cover_url"):
+            return False
+        extra = {k: v for k, v in item["extra"].items() if k != "cover_url"}
+        return self.update(item_id, extra=extra)
+
+    def _discard_cover(self, url):
+        """Delete an uploaded cover file once no item uses it (copies can share one)."""
+        name = covers.filename_from_url(url)
+        if not name or self.covers_dir is None:
+            return
+        still_used = self.conn.execute(
+            "SELECT 1 FROM items WHERE json_extract(extra, '$.cover_url') = ? LIMIT 1", (url,)).fetchone()
+        if not still_used:
+            (self.covers_dir / name).unlink(missing_ok=True)
 
     # ------------------------------------------------------------------ genres (public)
     def genres(self, media_type=None) -> list[dict]:
@@ -493,6 +547,69 @@ class Catalog:
                              else "keyword" if item_id in kw else "semantic")
             results.append(item)
         return results
+
+    _TITLE_STOPWORDS = {"the", "a", "an", "of", "and", "part", "vol", "volume", "edition", "to", "in", "on"}
+
+    @classmethod
+    def _title_words(cls, title) -> set[str]:
+        return {w for w in re.findall(r"[a-z0-9]+", (title or "").casefold())
+                if len(w) > 2 and w not in cls._TITLE_STOPWORDS and not w.isdigit()}
+
+    def similar(self, item_id, limit=6) -> list[dict]:
+        """Items related to this one, best first, each with a short `reason`.
+
+        Signals: same creator, related title (e.g. the Dune novel and the Dune films),
+        shared genres, shared tags, and, when semantic search is on, similar subject matter.
+        """
+        item = self.get(item_id)
+        if item is None:
+            return []
+        my_genres = {genre_key(g): g for g in item["genres"]}
+        my_creator = (item.get("creator") or "").strip().casefold()
+        my_words = self._title_words(item["title"])
+        tag_set = lambda text: {genre_key(t): t.strip() for t in (text or "").split(",") if genre_key(t)}
+        my_tags = tag_set(item.get("tags"))
+
+        sims = {}
+        if self.embedder is not None:
+            row = self.conn.execute("SELECT vector FROM embeddings WHERE item_id = ? AND model = ?",
+                                    (item_id, self.embedder.model_name)).fetchone()
+            if row:
+                import numpy as np
+                mine = np.frombuffer(row["vector"], dtype=np.float32)
+                for r in self.conn.execute("SELECT item_id, vector FROM embeddings WHERE model = ? AND item_id != ?",
+                                           (self.embedder.model_name, item_id)):
+                    sims[r["item_id"]] = float(np.frombuffer(r["vector"], dtype=np.float32) @ mine)
+
+        scored = []
+        for other in self.list():
+            if other["id"] == item_id:
+                continue
+            score, reasons = 0.0, []
+            if my_creator and (other.get("creator") or "").strip().casefold() == my_creator:
+                score += 3
+                reasons.append(f"Also by {item['creator']}")
+            if my_words & self._title_words(other["title"]):
+                score += 2.5
+                reasons.append("Related title")
+            shared = [g for g in other["genres"] if genre_key(g) in my_genres]
+            if shared:
+                score += len(shared)
+                reasons.append(", ".join(shared))
+            tags = [t for k, t in tag_set(other.get("tags")).items() if k in my_tags]
+            if tags:
+                score += 0.75 * len(tags)
+                reasons.append("Tagged " + ", ".join(tags))
+            sim = sims.get(other["id"], 0.0)
+            if sim >= 0.35:
+                score += 3 * sim
+                if not reasons:
+                    reasons.append("Similar subject")
+            if score > 0:
+                other["reason"] = " · ".join(reasons)
+                scored.append((score, other))
+        scored.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
+        return [other for _, other in scored[:limit]]
 
     def suggest(self, query, n=3) -> list[str]:
         """Typo fallback: closest titles/creators by string similarity."""
