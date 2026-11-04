@@ -76,6 +76,11 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                                  CREATOR_LABEL=CREATOR_LABEL, YEAR_LABEL=YEAR_LABEL, label=label,
                                  semantic_on=embedder is not None)
 
+    # Clear out any cover files left behind last time (e.g. ones Windows had locked).
+    startup = Catalog(app.config["DB_PATH"])
+    startup.prune_covers()
+    startup.conn.close()
+
     def catalog() -> Catalog:
         # One SQLite connection per request; the (expensive) embedder is shared.
         if "catalog" not in g:

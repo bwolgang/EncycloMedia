@@ -553,8 +553,8 @@ def test_web_cover_upload_flow(cat):
     assert resp.headers["Location"] == "/"
     book = cat.search("leviathan")[0]
     url = book["extra"]["cover_url"]
-    img = client.get(url)
-    assert img.status_code == 200 and img.mimetype == "image/jpeg"
+    with client.get(url) as img:  # close the response so the file isn't left open (matters on Windows)
+        assert img.status_code == 200 and img.mimetype == "image/jpeg"
     assert f'src="{url}"' in client.get(f"/item/{book['id']}").get_data(as_text=True)
 
     # Saving the edit form unchanged keeps the cover; clearing cover_url removes it and its file.
@@ -562,14 +562,17 @@ def test_web_cover_upload_flow(cat):
     client.post(f"/item/{book['id']}/edit", data=form)
     assert cat.get(book["id"])["extra"]["cover_url"] == url
     client.post(f"/item/{book['id']}/edit", data={**form, "cover_url": ""})
-    assert "cover_url" not in cat.get(book["id"])["extra"] and client.get(url).status_code == 404
+    assert "cover_url" not in cat.get(book["id"])["extra"]
+    with client.get(url) as gone:
+        assert gone.status_code == 404
 
     # Quick upload from the details page; a bad file is refused with a message.
     resp = client.post(f"/item/{book['id']}/cover", content_type="multipart/form-data",
                        data={"cover_file": (io.BytesIO(make_image("PNG")), "scan.png")})
     assert resp.headers["Location"] == f"/item/{book['id']}"
     quick = cat.get(book["id"])["extra"]["cover_url"]
-    assert quick.startswith("/covers/") and client.get(quick).status_code == 200
+    with client.get(quick) as resp:
+        assert quick.startswith("/covers/") and resp.status_code == 200
     client.post(f"/item/{book['id']}/cover", content_type="multipart/form-data",
                 data={"cover_file": (io.BytesIO(b"not an image"), "notes.jpg")})
     page = client.get(f"/item/{book['id']}").get_data(as_text=True)
@@ -602,3 +605,25 @@ def test_web_rejects_oversized_upload(cat):
                        headers={"Referer": f"/item/{dune['id']}"})
     assert resp.status_code == 302
     assert "too big" in client.get(f"/item/{dune['id']}").get_data(as_text=True)
+
+
+def test_locked_cover_file_does_not_break_saving(cat, monkeypatch):
+    """On Windows an open file can't be deleted. Removing a cover must still work,
+    and the leftover file is cleaned up later."""
+    from pathlib import Path
+    hades = cat.search("hades")[0]
+    url = cat.set_cover_image(hades["id"], make_image())
+    path = cat.covers_dir / url.rsplit("/", 1)[1]
+
+    real_unlink = Path.unlink
+
+    def locked(self, *a, **kw):
+        raise PermissionError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    assert cat.clear_cover(hades["id"])                 # no crash
+    assert "cover_url" not in cat.get(hades["id"])["extra"] and path.exists()
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)  # file no longer locked
+    assert cat.prune_covers() == 1 and not path.exists()
+    create_app(cat.db_path)                            # starting the app also tidies up

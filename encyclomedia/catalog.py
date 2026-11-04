@@ -371,14 +371,30 @@ class Catalog:
         return self.update(item_id, extra=extra)
 
     def _discard_cover(self, url):
-        """Delete an uploaded cover file once no item uses it (copies can share one)."""
-        name = covers.filename_from_url(url)
-        if not name or self.covers_dir is None:
-            return
-        still_used = self.conn.execute(
-            "SELECT 1 FROM items WHERE json_extract(extra, '$.cover_url') = ? LIMIT 1", (url,)).fetchone()
-        if not still_used:
-            (self.covers_dir / name).unlink(missing_ok=True)
+        """Called when a cover stops being used; tidies up unused cover files."""
+        if covers.filename_from_url(url):
+            self.prune_covers()
+
+    def prune_covers(self) -> int:
+        """Delete uploaded cover files that no item uses (copies can share one file).
+
+        A file that can't be deleted right now (on Windows, one that is still open,
+        e.g. being sent to a browser) is skipped and picked up on a later run.
+        Returns the number of files deleted.
+        """
+        if self.covers_dir is None or not self.covers_dir.is_dir():
+            return 0
+        in_use = {covers.filename_from_url(r[0]) for r in self.conn.execute(
+            "SELECT json_extract(extra, '$.cover_url') FROM items")}
+        deleted = 0
+        for path in self.covers_dir.iterdir():
+            if path.is_file() and covers.filename_from_url(covers.URL_PREFIX + path.name) and path.name not in in_use:
+                try:
+                    path.unlink()
+                    deleted += 1
+                except OSError:
+                    pass  # in use or locked; try again next time
+        return deleted
 
     # ------------------------------------------------------------------ genres (public)
     def genres(self, media_type=None) -> list[dict]:
