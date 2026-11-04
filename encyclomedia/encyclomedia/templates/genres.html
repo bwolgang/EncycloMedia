@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Genres · EncycloMedia{% endblock %}
+{% block head %}
+<style>
+  h1 { font-family: Georgia, serif; margin: 0 0 4px; font-size: 26px; }
+  .intro { margin: 0 0 18px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; width: 64px; }
+  td.num.zero { color: var(--line); }
+  .edit { display: flex; gap: 6px; justify-content: flex-end; }
+  .edit input { width: 170px; padding: 5px 8px; }
+  .edit button { padding: 5px 10px; font-size: 13px; white-space: nowrap; }
+  @media (max-width: 760px) { .types { display: none; } .edit input { width: 120px; } }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Genres</h1>
+<p class="intro muted">Rename a genre to fix it everywhere. Renaming to a genre that already exists merges the two,
+which is how to fold spelling variants together.</p>
+
+{% if not genres %}
+  <p class="muted">No genres yet. Add them to items and they'll show up here.</p>
+{% else %}
+<table>
+  <thead><tr>
+    <th>Genre</th><th class="num">Items</th>
+    {% for t in MEDIA_TYPES %}<th class="num types">{{ t|capitalize }}</th>{% endfor %}
+    <th></th>
+  </tr></thead>
+  <tbody>
+  {% for g in genres %}
+    <tr>
+      <td><a class="chip" href="{{ url_for('index', genre=g.name) }}">{{ g.name }}</a></td>
+      <td class="num"><b>{{ g.count }}</b></td>
+      {% for t in MEDIA_TYPES %}{% set n = per_type[t].get(g.name, 0) %}
+        <td class="num types {{ 'zero' if not n }}">{{ n }}</td>{% endfor %}
+      <td>
+        <div class="edit">
+          <form method="post" action="{{ url_for('genres_rename') }}" style="display:flex;gap:6px">
+            <input type="hidden" name="old" value="{{ g.name }}">
+            <input name="new" list="allGenres" placeholder="New name…" required>
+            <button type="submit">Rename</button>
+          </form>
+          <form method="post" action="{{ url_for('genres_remove') }}"
+                data-msg="Remove “{{ g.name }}” from {{ g.count }} item(s)? The items themselves stay."
+                onsubmit="return confirm(this.dataset.msg)">
+            <input type="hidden" name="name" value="{{ g.name }}">
+            <button class="danger" type="submit">Remove</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<datalist id="allGenres">{% for g in genres %}<option value="{{ g.name }}">{% endfor %}</datalist>
+{% endif %}
+{% endblock %}

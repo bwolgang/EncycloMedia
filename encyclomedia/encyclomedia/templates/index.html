@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block head %}
+<style>
+  .search { display: grid; grid-template-columns: 1fr 130px 170px auto auto; gap: 8px; margin-bottom: 10px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 18px; font-size: 14px; }
+  .meta label { display: flex; gap: 5px; align-items: center; }
+  .meta input[type=radio] { width: auto; }
+  .results { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .card { position: relative; display: grid; grid-template-columns: 54px 1fr auto; gap: 14px; align-items: center;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .card:hover { border-color: var(--accent); }
+  .card h3 { margin: 0 0 2px; font-size: 16px; }
+  .card h3 a { color: inherit; text-decoration: none; }
+  .card h3 a::after { content: ""; position: absolute; inset: 0; }   /* whole card clickable */
+  .card .chips { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .cover { width: 54px; height: 72px; border-radius: 4px; background: var(--line); object-fit: cover; }
+  .card .sub { font-size: 13px; color: var(--muted); }
+  .score { text-align: right; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .bar { height: 4px; width: 70px; background: var(--line); border-radius: 2px; margin-top: 4px; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .active-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; font-size: 14px; }
+  .import { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line);
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+  .import input { width: auto; }
+  @media (max-width: 640px) {
+    .search { grid-template-columns: 1fr 1fr; } .search input[name=q] { grid-column: 1 / -1; }
+    .card { grid-template-columns: 44px 1fr; } .cover { width: 44px; height: 60px; } .score { display: none; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<form class="search" method="get" action="{{ url_for('index') }}" id="searchForm">
+  <input name="q" value="{{ q }}" placeholder="Search titles, people, genres, tags, notes…" autofocus>
+  <select name="type" onchange="this.form.genre.value=''; this.form.submit()">
+    <option value="">All media</option>
+    {% for t in MEDIA_TYPES %}<option value="{{ t }}" {{ 'selected' if media_type == t }}>{{ t|capitalize }}</option>{% endfor %}
+  </select>
+  <select name="genre" onchange="this.form.submit()">
+    <option value="">All genres</option>
+    {% for g in genre_options %}
+      <option value="{{ g.name }}" {{ 'selected' if genre and g.name|lower == genre|lower }}>{{ g.name }} ({{ g.count }})</option>
+    {% endfor %}
+  </select>
+  <button class="primary" type="submit">Search</button>
+  {% if q or genre %}<a class="btn" href="{{ url_for('index', type=media_type or '') }}">Clear</a>{% endif %}
+  <div class="meta" style="grid-column: 1 / -1; margin: 0;">
+    {% if semantic_on %}
+      <label><input type="radio" name="mode" value="hybrid" {{ 'checked' if mode == 'hybrid' }}> Smart (keywords + meaning)</label>
+      <label><input type="radio" name="mode" value="keyword" {{ 'checked' if mode == 'keyword' }}> Exact keywords</label>
+    {% else %}
+      <span class="muted">Keyword search · install sentence-transformers for meaning-based search</span>
+    {% endif %}
+  </div>
+</form>
+
+<div class="meta muted">
+  {% for t in MEDIA_TYPES %}<span><b class="t-{{ t }}">{{ counts.get(t, 0) }}</b> {{ t }}{{ '' if t == 'music' else 's' }}</span>{% endfor %}
+  {% if q or genre %}<span>· {{ items|length }} result{{ '' if items|length == 1 else 's' }}{% if q %} for “{{ q }}”{% endif %}</span>{% endif %}
+</div>
+
+{% if genre %}
+  <div class="active-filter">Genre:
+    <a class="chip active" href="{{ url_for('index', q=q, type=media_type or '') }}" title="Remove filter">{{ genre }} ✕</a>
+  </div>
+{% endif %}
+
+{% if suggestions %}
+  <p>No matches. Did you mean
+  {% for s in suggestions %}<a href="{{ url_for('index', q=s, type=media_type or '') }}">{{ s }}</a>{{ ', ' if not loop.last else '?' }}{% endfor %}</p>
+{% elif not items %}
+  <p class="muted">{{ 'No matches.' if (q or genre) else 'Nothing here yet. Add an item or import a CSV below.' }}</p>
+{% endif %}
+
+<ul class="results">
+{% for it in items %}
+  <li class="card">
+    {% if it.extra.cover_url %}<img class="cover" src="{{ it.extra.cover_url }}" alt="" loading="lazy" onerror="this.removeAttribute('src')">
+    {% else %}<div class="cover"></div>{% endif %}
+    <div>
+      <h3><a href="{{ url_for('item', item_id=it.id) }}">{{ it.title }}</a></h3>
+      <div class="sub">
+        <span class="pill t-{{ it.media_type }}">{{ it.media_type }}</span>
+        {% if it.creator %} {{ it.creator }}{% endif %}{% if it.year %} · {{ it.year }}{% endif %}
+        {% if it.format %} · {{ it.format }}{% endif %}
+        {% if it.extra.platform %} · {{ it.extra.platform }}{% endif %}
+      </div>
+      {% if it.genres %}
+      <div class="chips">
+        {% for g in it.genres %}
+          <a class="chip {{ 'active' if genre and g|lower == genre|lower }}" href="{{ url_for('index', genre=g, type=media_type or '') }}">{{ g }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% if it.score is defined %}
+      <div class="score">{{ it.match }}<div class="bar"><i style="width: {{ (it.score * 100)|round|int }}%"></i></div></div>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+
+<form class="import" method="post" action="{{ url_for('import_csv') }}" enctype="multipart/form-data">
+  <b>Import CSV</b>
+  <input type="file" name="file" accept=".csv,text/csv">
+  <button type="submit">Import</button>
+  <span class="muted">Header row: media_type, title, and any other field (creator, year, genre, isbn, platform…). Separate multiple genres with commas.</span>
+</form>
+{% endblock %}

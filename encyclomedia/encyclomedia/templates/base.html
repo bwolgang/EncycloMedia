@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}EncycloMedia{% endblock %}</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --panel: #ffffff; --ink: #1d1b18; --muted: #6b665d; --line: #e2ddd2;
+    --accent: #8a3b12; --accent-ink: #ffffff; --ok: #2f6b3a; --err: #a12a2a;
+    --book: #8a3b12; --music: #2b5d8a; --movie: #6b3a8a; --game: #2f6b3a;
+    --chip: #efebe2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161513; --panel: #201f1c; --ink: #ece8df; --muted: #a39d92; --line: #35322d;
+      --accent: #e08a55; --accent-ink: #161513; --ok: #7cc38a; --err: #ec8a8a;
+      --book: #e08a55; --music: #79aee0; --movie: #c39be0; --game: #7cc38a;
+      --chip: #2b2925;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--accent); }
+  header { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+  header .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+  .brand { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 700;
+           color: var(--ink); text-decoration: none; letter-spacing: .3px; }
+  .brand span { color: var(--accent); }
+  header nav { margin-left: auto; display: flex; gap: 14px; font-size: 14px; }
+  main { padding: 24px 0 48px; }
+  .btn, button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+                 padding: 7px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn.primary, button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--err); }
+  input, select, textarea { font: inherit; color: var(--ink); background: var(--panel);
+                            border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%; }
+  textarea { min-height: 70px; resize: vertical; }
+  .flash { padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); }
+  .flash.ok { border-color: var(--ok); color: var(--ok); }
+  .flash.error { border-color: var(--err); color: var(--err); }
+  .muted { color: var(--muted); }
+  .pill { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+          padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .t-book { color: var(--book); } .t-music { color: var(--music); }
+  .t-movie { color: var(--movie); } .t-game { color: var(--game); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 1.6;
+          padding: 0 9px; border-radius: 999px; background: var(--chip); color: var(--ink);
+          border: 1px solid var(--line); text-decoration: none; }
+  a.chip:hover { border-color: var(--accent); color: var(--accent); }
+  .chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  @media (max-width: 640px) { header nav { gap: 10px; font-size: 13px; } .brand { font-size: 19px; } }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="{{ url_for('index') }}">Encyclo<span>Media</span></a>
+  <nav>
+    <a href="{{ url_for('index') }}">Browse</a>
+    <a href="{{ url_for('genres_page') }}">Genres</a>
+    <a href="{{ url_for('add') }}">Add item</a>
+    <a href="{{ url_for('export_csv') }}">Export CSV</a>
+  </nav>
+</div></header>
+<main><div class="wrap">
+  {% for cat, msg in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</div></main>
+</body>
+</html>

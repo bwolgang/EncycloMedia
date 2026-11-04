@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title or 'Add item' }} · EncycloMedia{% endblock %}
+{% block head %}
+<style>
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 24px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  h1 { font-family: Georgia, serif; margin: 0 0 16px; font-size: 26px; }
+  h2 { font-size: 15px; margin: 18px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 13px; color: var(--muted); }
+  label > input, label > select, label > textarea { margin-top: 3px; }
+  .actions { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
+  .actions form { margin-left: auto; }
+  .typepick { display: flex; gap: 6px; flex-wrap: wrap; }
+  .typepick label { display: flex; align-items: center; gap: 4px; color: var(--ink); font-size: 14px;
+                    border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+  .typepick input { width: auto; margin: 0; }
+  .chipbox { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; padding: 5px 8px;
+             border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: text; }
+  .chipbox:focus-within { border-color: var(--accent); }
+  .chipbox #genreChips { display: contents; }
+  .chipbox input { border: 0; padding: 3px 2px; width: auto; flex: 1; min-width: 140px; outline: none; }
+  .chip button { border: 0; background: none; padding: 0 0 0 2px; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; }
+  .chip button:hover { color: var(--err); }
+  .lookup-row { display: flex; gap: 6px; }
+  .lookup-row button { flex: none; white-space: nowrap; }
+  .cands { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+  .cands button { width: 100%; text-align: left; display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: center; }
+  .cands img, .cands .ph { width: 40px; height: 54px; object-fit: cover; border-radius: 3px; background: var(--line); }
+  .cands small { color: var(--muted); display: block; }
+  .cover-big { width: 100%; max-height: 360px; object-fit: contain; border-radius: 8px; margin-bottom: 12px; }
+  .msg { font-size: 13px; margin-top: 10px; }
+  @media (max-width: 780px) { .layout { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+{% block content %}
+<div class="layout">
+<div class="panel">
+  <h1>{{ 'Edit item' if item.id else 'Add item' }}</h1>
+  <form method="post" id="itemForm">
+    <div class="typepick">
+      {% for t in MEDIA_TYPES %}
+        <label class="t-{{ t }}"><input type="radio" name="media_type" value="{{ t }}" {{ 'checked' if item.media_type == t }}> {{ t|capitalize }}</label>
+      {% endfor %}
+    </div>
+
+    <h2>Details</h2>
+    <div class="grid">
+      <label class="full">Title <input name="title" value="{{ item.title or '' }}" required></label>
+      <label><span id="creatorLabel">{{ CREATOR_LABEL[item.media_type] }}</span> <input name="creator" value="{{ item.creator or '' }}"></label>
+      <label><span id="yearLabel">{{ YEAR_LABEL[item.media_type] }}</span> <input name="year" inputmode="numeric" value="{{ item.year or '' }}"></label>
+      <label class="full">Format <input name="format" value="{{ item.format or '' }}" placeholder="hardcover, vinyl, Blu-ray, cartridge…"></label>
+      <div class="full">
+        <label for="genreInput">Genres</label>
+        <div class="chipbox" id="genreBox">
+          <span id="genreChips"></span>
+          <input id="genreInput" list="genreList" autocomplete="off" placeholder="Add a genre, press Enter">
+        </div>
+        <datalist id="genreList"></datalist>
+        <input type="hidden" name="genre" id="genreHidden" value="{{ (item.genres or [])|join(', ') }}">
+      </div>
+      <label class="full">Tags <input name="tags" value="{{ item.tags or '' }}" placeholder="comma separated"></label>
+    </div>
+
+    {% for t in MEDIA_TYPES %}
+    <fieldset class="extra" data-type="{{ t }}" style="border:0;padding:0;margin:0">
+      <h2>{{ t|capitalize }} details</h2>
+      <div class="grid">
+        {% for f in EXTRA_FIELDS[t] %}
+          {% set val = item.extra.get(f, '') if item.media_type == t else '' %}
+          <label class="{{ 'full' if f in ('tracklist', 'cast', 'cover_url') }}">{{ label(f) }}
+            {% if f == 'tracklist' %}<textarea name="extra__{{ f }}">{{ val }}</textarea>
+            {% else %}<input name="extra__{{ f }}" value="{{ val }}">{% endif %}
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+
+    <h2>Notes</h2>
+    <textarea name="notes" placeholder="Condition, where it's shelved, who borrowed it…">{{ item.notes or '' }}</textarea>
+
+    <div class="actions">
+      <button class="primary" type="submit">{{ 'Save' if item.id else 'Add to catalog' }}</button>
+      <a class="btn" href="{{ url_for('index') }}">Back</a>
+    </div>
+  </form>
+  {% if item.id %}
+  <form method="post" action="{{ url_for('delete', item_id=item.id) }}" onsubmit="return confirm('Delete this item?')" style="margin-top:10px">
+    <button class="danger" type="submit">Delete item</button>
+  </form>
+  {% endif %}
+</div>
+
+<aside class="panel">
+  {% if item.extra and item.extra.cover_url %}<img class="cover-big" src="{{ item.extra.cover_url }}" alt="" onerror="this.remove()">{% endif %}
+  <b>Auto-fill from online databases</b>
+  <p class="muted" style="font-size:13px;margin:4px 0 10px">Type a title, or an ISBN / barcode for books and music, then pick a match.</p>
+  <div class="lookup-row">
+    <input id="lookupQ" placeholder="Title or ISBN / barcode">
+    <button type="button" id="lookupBtn">Look up</button>
+  </div>
+  <div class="msg muted" id="lookupMsg"></div>
+  <ul class="cands" id="cands"></ul>
+</aside>
+</div>
+
+<script>
+const CREATOR_LABEL = {{ CREATOR_LABEL|tojson }};
+const YEAR_LABEL = {{ YEAR_LABEL|tojson }};
+const GENRES_BY_TYPE = {{ genres_by_type|tojson }};
+const form = document.getElementById('itemForm');
+const currentType = () => form.querySelector('input[name=media_type]:checked')?.value || 'book';
+
+function syncType() {
+  const t = currentType();
+  document.getElementById('creatorLabel').textContent = CREATOR_LABEL[t];
+  document.getElementById('yearLabel').textContent = YEAR_LABEL[t];
+  // Autocomplete only suggests genres already used for this media type.
+  const list = document.getElementById('genreList');
+  list.replaceChildren(...(GENRES_BY_TYPE[t] || []).map(name => {
+    const o = document.createElement('option'); o.value = name; return o;
+  }));
+  document.querySelectorAll('fieldset.extra').forEach(fs => {
+    const on = fs.dataset.type === t;
+    fs.hidden = !on;
+    fs.disabled = !on;
+  });
+}
+form.querySelectorAll('input[name=media_type]').forEach(r => r.addEventListener('change', syncType));
+syncType();
+
+
+// ---- genre chips ----------------------------------------------------------
+const KNOWN_GENRES = {{ all_genres|map(attribute='name')|list|tojson }};
+const genreKey = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+let genres = {{ (item.genres or [])|tojson }};
+const gInput = document.getElementById('genreInput'), gHidden = document.getElementById('genreHidden');
+
+function renderGenres() {
+  const box = document.getElementById('genreChips');
+  box.innerHTML = '';
+  genres.forEach((g, i) => {
+    const chip = document.createElement('span'), x = document.createElement('button');
+    chip.className = 'chip'; chip.textContent = g;
+    x.type = 'button'; x.textContent = '✕'; x.title = `Remove ${g}`;
+    x.addEventListener('click', () => { genres.splice(i, 1); renderGenres(); });
+    chip.appendChild(x); box.appendChild(chip);
+  });
+  gHidden.value = genres.join(', ');
+}
+function addGenres(text) {
+  for (const part of String(text).split(/[,;\/|]/)) {
+    const name = part.trim().replace(/\s+/g, ' '), k = genreKey(name);
+    if (!k || genres.some(g => genreKey(g) === k)) continue;
+    genres.push(KNOWN_GENRES.find(g => genreKey(g) === k) || name);   // reuse existing spelling
+  }
+  renderGenres();
+}
+function commitInput() { if (gInput.value.trim()) { addGenres(gInput.value); gInput.value = ''; } }
+gInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commitInput(); }
+  else if (e.key === 'Backspace' && !gInput.value && genres.length) { genres.pop(); renderGenres(); }
+});
+gInput.addEventListener('input', e => {   // picked from the autocomplete list
+  if (!e.inputType || e.inputType === 'insertReplacementText') commitInput();
+});
+gInput.addEventListener('blur', commitInput);
+document.getElementById('genreBox').addEventListener('click', () => gInput.focus());
+form.addEventListener('submit', commitInput);
+renderGenres();
+
+const q = document.getElementById('lookupQ');
+q.value = form.elements['title'].value;
+q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); lookup(); } });
+document.getElementById('lookupBtn').addEventListener('click', lookup);
+
+async function lookup() {
+  const msg = document.getElementById('lookupMsg'), list = document.getElementById('cands');
+  list.innerHTML = ''; msg.textContent = 'Searching…';
+  try {
+    const res = await fetch(`{{ url_for('api_lookup') }}?type=${currentType()}&q=${encodeURIComponent(q.value)}`);
+    const data = await res.json();
+    if (data.error) { msg.textContent = data.error; return; }
+    msg.textContent = data.results.length ? `${data.results.length} match(es) — click one to fill the form.` : 'No matches.';
+    data.results.forEach(c => {
+      const li = document.createElement('li'), b = document.createElement('button');
+      b.type = 'button';
+      const img = c.extra.cover_url ? document.createElement('img') : document.createElement('div');
+      if (c.extra.cover_url) { img.src = c.extra.cover_url; img.onerror = () => img.removeAttribute('src'); } else img.className = 'ph';
+      const text = document.createElement('div');
+      text.textContent = c.title || '(untitled)';
+      const sub = document.createElement('small');
+      sub.textContent = [c.creator, c.year, c.extra.platform || c.format, c.source].filter(Boolean).join(' · ');
+      text.appendChild(sub);
+      b.append(img, text);
+      b.addEventListener('click', () => fill(c));
+      li.appendChild(b); list.appendChild(li);
+    });
+  } catch (e) { msg.textContent = 'Lookup failed: ' + e; }
+}
+
+function fill(c) {
+  for (const k of ['title', 'creator', 'year', 'format', 'notes']) {
+    if (c[k] != null && c[k] !== '') form.elements[k].value = c[k];
+  }
+  if (c.genre) { genres = []; addGenres(c.genre); }
+  for (const [k, v] of Object.entries(c.extra || {})) {
+    const el = form.querySelector(`fieldset[data-type="${c.media_type}"] [name="extra__${k}"]`);
+    if (el) el.value = v;
+  }
+  document.getElementById('lookupMsg').textContent = `Filled from ${c.source}. Review, then save.`;
+}
+</script>
+{% endblock %}
