@@ -1,0 +1,87 @@
+# =============================================================================
+# EncycloMedia .gitignore
+# Keeps the repo to source code only: no personal data, secrets, or machine-
+# specific files.
+# =============================================================================
+
+# ---- Your catalog data (personal; the repo is public) -----------------------
+# SQLite catalog databases, e.g. ~/.encyclomedia.db, demo.db
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+# CSV exports of your collection (the web app's "Export CSV" downloads encyclomedia.csv)
+*.csv
+# ...but keep the sample data that ships with the project
+!sample_collection.csv
+
+# ---- Secrets: API keys for TMDB / IGDB --------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+
+# ---- Python bytecode and caches ---------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Virtual environments ---------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ---- Packaging / build output -----------------------------------------------
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# ---- Testing and coverage ---------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# ---- Type checkers / linters ------------------------------------------------
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# ---- Jupyter (if you experiment in notebooks) -------------------------------
+.ipynb_checkpoints/
+
+# ---- Downloaded model files (semantic search) -------------------------------
+# sentence-transformers normally caches models in your home folder, but if you
+# point it at the project folder, keep the ~90 MB+ model out of git.
+models/
+.cache/
+
+# ---- PyCharm / JetBrains and other editors ----------------------------------
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# ---- Logs and temporary files -----------------------------------------------
+*.log
+*.tmp
+
+# ---- Operating system clutter -----------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
