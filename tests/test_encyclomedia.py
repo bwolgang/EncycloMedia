@@ -627,3 +627,117 @@ def test_locked_cover_file_does_not_break_saving(cat, monkeypatch):
     monkeypatch.setattr(Path, "unlink", real_unlink)  # file no longer locked
     assert cat.prune_covers() == 1 and not path.exists()
     create_app(cat.db_path)                            # starting the app also tidies up
+
+
+# --------------------------------------------------------------------------- "your copy" fields
+def test_copy_fields_work_for_every_media_type(cat):
+    for media_type in ("book", "music", "movie", "game"):
+        item_id = cat.add(media_type, f"Test {media_type}", extra={
+            "edition": "Collector's edition", "location": "Shelf B1",
+            "origin": "Gift from Chris", "condition": "Like new"})
+        extra = cat.get(item_id)["extra"]
+        assert (extra["edition"], extra["location"], extra["origin"], extra["condition"]) == (
+            "Collector's edition", "Shelf B1", "Gift from Chris", "Like new")
+
+
+def test_copy_fields_are_searchable_and_filterable(cat):
+    dune = cat.search("9780441013593")[0]
+    hades = cat.search("hades")[0]
+    cat.update(dune["id"], extra={**dune["extra"], "location": "Living room shelf A2", "origin": "Barnes & Noble",
+                                  "condition": "Spine creased"})
+    cat.update(hades["id"], extra={**hades["extra"], "location": "living room SHELF a2 ", "origin": "GameStop"})
+    assert cat.search("creased")[0]["title"] == "Dune"             # condition notes are searchable
+    # Exact location filter ignores case and stray spaces, and doesn't match partial words.
+    assert {i["title"] for i in cat.list(location="Living Room Shelf A2")} == {"Dune", "Hades"}
+    assert cat.list(location="Shelf A") == []
+    assert [i["title"] for i in cat.list(origin="gamestop")] == ["Hades"]
+    assert [i["title"] for i in cat.search("dune", location="living room shelf a2")] == ["Dune"]
+    assert [i["title"] for i in cat.list(media_type="game", location="living room shelf a2")] == ["Hades"]
+    # The suggestion list merges spelling variants under the most common spelling.
+    cat.add("music", "Kind of Blue", extra={"location": "Living room shelf A2"})
+    assert cat.copy_values("location") == [{"name": "Living room shelf A2", "count": 3}]
+    with pytest.raises(ValueError):
+        cat.copy_values("isbn")
+
+
+def test_copy_fields_csv_round_trip(cat, tmp_path):
+    dune = cat.search("9780441013593")[0]
+    cat.update(dune["id"], extra={**dune["extra"], "edition": "First edition", "location": "Shelf A2",
+                                  "origin": "Estate sale", "condition": "Foxing on pages"})
+    text = cat.export_csv()
+    header = text.splitlines()[0].split(",")
+    assert header[8:12] == ["edition", "location", "origin", "condition"]  # right after the core fields
+    copy = Catalog(tmp_path / "copy.db")
+    copy.import_csv(io.StringIO(text))
+    extra = copy.search("9780441013593")[0]["extra"]
+    assert (extra["edition"], extra["location"], extra["origin"], extra["condition"]) == (
+        "First edition", "Shelf A2", "Estate sale", "Foxing on pages")
+
+
+def test_existing_book_edition_still_shows(cat):
+    """Books saved before this change already had an 'edition'; it now appears under Your copy."""
+    app = create_app(cat.db_path)
+    app.testing = True
+    dune = cat.search("9780441013593")[0]
+    cat.update(dune["id"], extra={**dune["extra"], "edition": "Ace mass-market"})
+    page = app.test_client().get(f"/item/{dune['id']}").get_data(as_text=True)
+    assert "Your copy" in page and "Ace mass-market" in page
+    assert page.count("Ace mass-market") == 1                      # not listed twice
+
+
+def test_web_form_saves_copy_fields_and_details_page_shows_them(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    client.post("/add", data={"media_type": "movie", "title": "Arrival", "extra__edition": "4K Steelbook",
+                              "extra__location": "Media cabinet", "extra__origin": "Best Buy",
+                              "extra__condition": "Sealed\nSlipcover has a dent"})
+    arrival = cat.search("arrival")[0]
+    assert arrival["extra"]["condition"] == "Sealed\nSlipcover has a dent"
+    page = client.get(f"/item/{arrival['id']}").get_data(as_text=True)
+    for text in ("Your copy", "Edition", "4K Steelbook", "Condition notes", "Slipcover has a dent",
+                 'href="/?location=Media+cabinet"', 'href="/?origin=Best+Buy"'):
+        assert text in page, text
+    # Browse filtered by location, with a removable filter chip and the location on each card.
+    browse = client.get("/?location=media+cabinet").get_data(as_text=True)
+    assert "Arrival" in browse and "Dune" not in browse and "Location: Media cabinet" in browse
+    assert 'title="Remove filter">media cabinet ✕' in browse
+
+    # Editing keeps them unless changed, and the form suggests locations already used.
+    edit = client.get(f"/item/{arrival['id']}/edit").get_data(as_text=True)
+    assert 'value="4K Steelbook"' in edit and '<option value="Media cabinet">' in edit
+    client.post(f"/item/{arrival['id']}/edit", data={"media_type": "movie", "title": "Arrival",
+                                                     "extra__location": "Storage box 3"})
+    extra = cat.get(arrival["id"])["extra"]
+    assert extra["location"] == "Storage box 3" and "edition" not in extra  # blank fields are cleared
+
+
+def test_add_another_copy_starts_copy_fields_blank(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    dune = cat.search("9780441013593")[0]
+    cat.update(dune["id"], extra={**dune["extra"], "edition": "First edition", "location": "Shelf A2",
+                                  "origin": "Estate sale", "condition": "Worn"})
+    page = app.test_client().get(f"/add?copy={dune['id']}").get_data(as_text=True)
+    assert 'value="Frank Herbert"' in page and "9780441013593" in page  # shared details copied
+    for field in ("edition", "location", "origin"):                        # copy-specific ones are not
+        assert re.search(rf'name="extra__{field}" value=""', page), field
+    assert re.search(r'name="extra__condition"[^>]*>\s*</textarea>', page)
+
+
+def test_cli_copy_fields(tmp_path, capsys):
+    from encyclomedia.__main__ import main
+    db = str(tmp_path / "cli.db")
+    main(["--db", db, "--no-semantic", "add", "game", "Hades", "--location", "Media cabinet",
+          "--origin", "GameStop", "--edition", "Physical", "--condition", "Like new"])
+    main(["--db", db, "--no-semantic", "add", "book", "Dune", "--location", "Shelf A2"])
+    main(["--db", db, "--no-semantic", "edit", "2", "--condition", "Spine creased"])
+    capsys.readouterr()
+    main(["--db", db, "--no-semantic", "list", "--location", "media cabinet"])
+    assert "Hades" in capsys.readouterr().out
+    main(["--db", db, "--no-semantic", "locations"])
+    out = capsys.readouterr().out
+    assert "Media cabinet" in out and "Shelf A2" in out
+    main(["--db", db, "--no-semantic", "show", "2"])
+    out = capsys.readouterr().out
+    assert "Your copy:" in out and "Spine creased" in out and "Shelf A2" in out

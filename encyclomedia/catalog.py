@@ -43,9 +43,15 @@ CREATOR_LABEL = {"book": "Author", "music": "Artist", "movie": "Director", "game
 YEAR_LABEL = {"book": "First published", "music": "Original release",
               "movie": "Release year", "game": "Release year"}
 
+# Details about your physical copy, the same for every media type. Stored in the
+# JSON `extra` column alongside the type-specific fields, and included in search.
+COPY_FIELDS = ("edition", "location", "origin", "condition")
+COPY_LABELS = {"edition": "Edition", "location": "Location", "origin": "Origin",
+               "condition": "Condition notes"}
+
 # Type-specific fields, stored in the JSON `extra` column.
 EXTRA_FIELDS = {
-    "book": ("isbn", "edition", "edition_year", "publisher", "pages", "series", "cover_url"),
+    "book": ("isbn", "edition_year", "publisher", "pages", "series", "cover_url"),
     "music": ("barcode", "edition_year", "label", "tracklist", "discs", "cover_url"),
     "movie": ("upc", "runtime", "rating", "cast", "cover_url"),
     "game": ("platform", "publisher", "players", "barcode", "cover_url"),
@@ -230,8 +236,9 @@ class Catalog:
         self.conn.execute("DELETE FROM genres WHERE id NOT IN (SELECT genre_id FROM item_genres)")
 
     @staticmethod
-    def _filters(media_type, genre, alias="items"):
-        """WHERE clauses + args for the media-type and genre filters."""
+    def _filters(media_type=None, genre=None, alias="items", location=None, origin=None):
+        """WHERE clauses + args for the media-type, genre, location and origin filters.
+        Location and origin match the whole value, ignoring case and surrounding spaces."""
         clauses, args = [], []
         if media_type:
             clauses.append(f"{alias}.media_type = ?")
@@ -240,6 +247,10 @@ class Catalog:
             clauses.append(f"EXISTS (SELECT 1 FROM item_genres ig JOIN genres g ON g.id = ig.genre_id "
                            f"WHERE ig.item_id = {alias}.id AND g.key = ?)")
             args.append(genre_key(genre))
+        for field, value in (("location", location), ("origin", origin)):
+            if value and value.strip():
+                clauses.append(f"lower(trim(json_extract({alias}.extra, '$.{field}'))) = lower(?)")
+                args.append(value.strip())
         return clauses, args
 
     # ------------------------------------------------------------------ helpers
@@ -461,7 +472,7 @@ class Catalog:
                 if not title or media_type not in MEDIA_TYPES:
                     continue
                 core = {k: v for k, v in row.items() if k in CORE_FIELDS}
-                extra = {k: v for k, v in row.items() if k in EXTRA_FIELDS[media_type]}
+                extra = {k: v for k, v in row.items() if k in EXTRA_FIELDS[media_type] or k in COPY_FIELDS}
                 self.add(media_type, title, extra=extra, **core)
                 count += 1
         finally:
@@ -470,10 +481,11 @@ class Catalog:
         return count
 
     def export_csv(self) -> str:
-        """Whole catalog as CSV text; type-specific fields become their own columns."""
-        extra_cols = sorted({f for fs in EXTRA_FIELDS.values() for f in fs})
+        """Whole catalog as CSV text; copy and type-specific fields become their own columns."""
+        extra_cols = sorted({f for fs in EXTRA_FIELDS.values() for f in fs} - set(COPY_FIELDS))
         out = io.StringIO()
-        w = csv.DictWriter(out, fieldnames=["media_type", *CORE_FIELDS, *extra_cols], extrasaction="ignore")
+        w = csv.DictWriter(out, fieldnames=["media_type", *CORE_FIELDS, *COPY_FIELDS, *extra_cols],
+                           extrasaction="ignore")
         w.writeheader()
         for item in self.list():
             w.writerow({**{k: item.get(k) for k in ("media_type", *CORE_FIELDS)}, **item["extra"]})
@@ -484,17 +496,36 @@ class Catalog:
         row = self.conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self.to_dict(row) if row else None
 
-    def list(self, media_type=None, genre=None) -> list[dict]:
-        clauses, args = self._filters(media_type, genre)
+    def list(self, media_type=None, genre=None, location=None, origin=None) -> list[dict]:
+        clauses, args = self._filters(media_type, genre, location=location, origin=origin)
         sql = "SELECT * FROM items" + (f" WHERE {' AND '.join(clauses)}" if clauses else "")
         rows = self.conn.execute(sql + " ORDER BY media_type, title COLLATE NOCASE", args)
         return [self.to_dict(r) for r in rows]
+
+    def copy_values(self, field, media_type=None) -> list[dict]:
+        """Every distinct value used for a copy field (e.g. all your locations), with
+        how many items have it, most used first. Spelling differences in capital
+        letters or spaces count as the same value; the most common spelling is shown."""
+        if field not in COPY_FIELDS:
+            raise ValueError(f"Unknown copy field {field!r}")
+        clauses, args = self._filters(media_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        groups: dict[str, dict] = {}
+        for (value,) in self.conn.execute(f"SELECT json_extract(extra, '$.{field}') FROM items {where}", args):
+            value = " ".join(str(value or "").split())
+            if not value:
+                continue
+            g = groups.setdefault(value.casefold(), {"count": 0, "spellings": {}})
+            g["count"] += 1
+            g["spellings"][value] = g["spellings"].get(value, 0) + 1
+        out = [{"name": max(g["spellings"], key=g["spellings"].get), "count": g["count"]} for g in groups.values()]
+        return sorted(out, key=lambda v: (-v["count"], v["name"].casefold()))
 
     def counts(self) -> dict:
         return {r[0]: r[1] for r in self.conn.execute("SELECT media_type, COUNT(*) FROM items GROUP BY media_type")}
 
     # ------------------------------------------------------------------ search
-    def _keyword_scores(self, query, media_type, genre, limit) -> dict[int, float]:
+    def _keyword_scores(self, query, filters: dict, limit) -> dict[int, float]:
         terms = re.findall(r"\w+", query.lower())
         if not terms:
             return {}
@@ -504,7 +535,7 @@ class Catalog:
                   FROM items_fts JOIN items ON items.id = items_fts.rowid
                   WHERE items_fts MATCH ?"""
         args = [fts_query]
-        clauses, fargs = self._filters(media_type, genre)
+        clauses, fargs = self._filters(**filters)
         for c in clauses:
             sql += f" AND {c}"
         args += fargs
@@ -513,12 +544,12 @@ class Catalog:
         # bm25() is negative; flip so bigger = better.
         return {r["id"]: -r["score"] for r in self.conn.execute(sql, args)}
 
-    def _semantic_scores(self, query, media_type, genre, min_similarity) -> dict[int, float]:
+    def _semantic_scores(self, query, filters: dict, min_similarity) -> dict[int, float]:
         import numpy as np
 
         sql = "SELECT e.item_id, e.vector FROM embeddings e JOIN items i ON i.id = e.item_id WHERE e.model = ?"
         args = [self.embedder.model_name]
-        clauses, fargs = self._filters(media_type, genre, alias="i")
+        clauses, fargs = self._filters(**filters, alias="i")
         for c in clauses:
             sql += f" AND {c}"
         args += fargs
@@ -532,7 +563,7 @@ class Catalog:
         return {i: float(s) for i, s in zip(ids, sims) if s >= min_similarity}
 
     def search(self, query, media_type=None, limit=10, semantic=True,
-               alpha=0.5, min_similarity=0.3, genre=None) -> list[dict]:
+               alpha=0.5, min_similarity=0.3, genre=None, location=None, origin=None) -> list[dict]:
         """Best matches first. Each result gets `score` (0-1) and `match`.
 
         With an embedder and semantic=True this is hybrid search:
@@ -540,13 +571,14 @@ class Catalog:
         where keyword_score is BM25 scaled so the best keyword hit is 1.0.
         Items can surface through either signal; matching both ranks highest.
         """
-        kw = self._keyword_scores(query, media_type, genre, max(limit * 5, 50))
+        filters = {"media_type": media_type, "genre": genre, "location": location, "origin": origin}
+        kw = self._keyword_scores(query, filters, max(limit * 5, 50))
         top_kw = max(kw.values(), default=0) or 1.0
         kw = {i: s / top_kw for i, s in kw.items()}
 
         sem = {}
         if semantic and self.embedder is not None and query.strip():
-            sem = self._semantic_scores(query, media_type, genre, min_similarity)
+            sem = self._semantic_scores(query, filters, min_similarity)
 
         if sem:
             ids = set(kw) | set(sem)

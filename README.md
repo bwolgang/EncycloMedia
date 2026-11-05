@@ -26,7 +26,7 @@ original single-file script, run with `--db ~/.media_catalog.db` and that databa
 Every item has title, creator, year, genre, format, tags and notes. Each type also has its own fields,
 stored as JSON and included in search:
 
-- **book**: isbn, edition, edition_year, publisher, pages, series
+- **book**: isbn, edition_year, publisher, pages, series
 - **music**: barcode, edition_year, label, tracklist, discs
 - **movie**: upc, runtime, rating, cast
 - **game**: platform, publisher, players, barcode
@@ -37,6 +37,24 @@ printing of a 1937 novel or a 2019 vinyl reissue. An ISBN or barcode lookup fill
 
 All four also have `cover_url`. To add a field, add its name to `EXTRA_FIELDS` in `catalog.py`.
 The form, CSV import/export and search pick it up automatically.
+
+### Your copy: edition, location, origin, condition
+Every item, of any type, has four fields describing your physical copy:
+
+| Field | For | Example |
+|---|---|---|
+| **Edition** | which version you own | First edition, Director's cut, Collector's edition |
+| **Location** | where it's stored | Living room shelf A2, Storage box 3 |
+| **Origin** | where you got it | Barnes & Noble, eBay, Gift from Chris |
+| **Condition notes** | its current state | Spine creased, disc lightly scratched |
+
+- These fields are in the **Your copy** section of the add/edit form. Location and Origin suggest places
+  you've used before, so "Shelf A2" stays spelled one way.
+- The details page shows them under **Your copy**. Clicking a location or origin lists everything stored
+  there or bought there. Browse cards also show each item's location.
+- All four fields are included in search ("scratched" finds items with that in their condition notes).
+- **Add another copy** leaves these four fields blank, since they describe one particular copy.
+- CSV import and export use the columns `edition`, `location`, `origin` and `condition`.
 
 ### Item pages
 Clicking an item in the catalog opens its **details page**, which shows the cover, credits, every saved field,
@@ -108,6 +126,11 @@ python -m encyclomedia search "herbert" --keyword-only
 python -m encyclomedia add music "Swimming" --creator "Mac Miller" --genre "Hip-Hop, Jazz rap"
 python -m encyclomedia list --type movie
 python -m encyclomedia list --genre "jazz rap"
+python -m encyclomedia add movie "Arrival" --edition "4K Steelbook" --location "Media cabinet" \
+    --origin "Best Buy" --condition "Sealed"
+python -m encyclomedia edit 3 --location "Storage box 3"
+python -m encyclomedia list --location "media cabinet"
+python -m encyclomedia locations                                # or: locations --origins
 python -m encyclomedia search "mac" --genre hip-hop
 python -m encyclomedia genres --type music
 python -m encyclomedia genre-rename "Rap" "Hip-Hop"           # merge

@@ -31,6 +31,11 @@
   .facts dt, .facts dd { margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); }
   .facts dt { color: var(--muted); font-size: 13px; padding-right: 24px; }
   .facts dt:last-of-type, .facts dd:last-of-type { border-bottom: 0; }
+  .facts.copy { margin-bottom: 0; }
+  .facts.copy dd a { color: inherit; text-decoration-color: var(--line); }
+  .facts.copy dd a:hover { color: var(--accent); }
+  .facts .multiline { white-space: pre-wrap; }
+  .empty-copy { font-size: 14px; margin: 0; }
   section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
   section { margin-bottom: 24px; }
   .people { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -127,6 +132,26 @@
         {% for k, v in details %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}
       </dl>
     {% endif %}
+
+    <section>
+      <h2>Your copy</h2>
+      {% if copy_details %}
+        <dl class="facts copy">
+          {% for field, name, value in copy_details %}
+            <dt>{{ name }}</dt>
+            <dd>
+              {% if field in ('location', 'origin') %}
+                <a href="{{ url_for('index', **{field: value}) }}"
+                   title="Everything with this {{ name|lower }}">{{ value }}</a>
+              {% else %}<span class="{{ 'multiline' if field == 'condition' }}">{{ value }}</span>{% endif %}
+            </dd>
+          {% endfor %}
+        </dl>
+      {% else %}
+        <p class="muted empty-copy">No edition, location, origin or condition recorded yet.
+          <a href="{{ url_for('edit', item_id=item.id) }}">Add them</a></p>
+      {% endif %}
+    </section>
 
     {% if item.extra.cast %}
       <section>

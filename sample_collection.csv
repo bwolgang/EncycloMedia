@@ -1,14 +1,14 @@
-media_type,title,creator,year,genre,format,tags,notes,isbn,publisher,pages,label,tracklist,runtime,cast,platform,players
-book,Dune,Frank Herbert,1965,"Science fiction, Space opera",paperback,"desert, politics, ecology",Shelf A2,9780441013593,Ace,604,,,,,,
-book,Mythos,Stephen Fry,2017,"Mythology, Nonfiction",hardcover,greek,,9781405934138,Michael Joseph,416,,,,,,
-book,The Hobbit,J.R.R. Tolkien,1937,"Fantasy, Adventure",hardcover,"dragons, quest",Gift from Chris,9780547928227,Houghton Mifflin,300,,,,,,
-music,Swimming,Mac Miller,2018,"Hip-Hop, Jazz rap",vinyl,,,,,,Warner,"Come Back to Earth; Hurt Feelings; What's the Use?; Self Care; Ladders",,,,
-music,To Pimp a Butterfly,Kendrick Lamar,2015,"hip hop, jazz-rap, Funk",CD,,,,,,Top Dawg,"Wesley's Theory; King Kunta; Alright; The Blacker the Berry",,,,
-music,Kind of Blue,Miles Davis,1959,"Jazz, Modal jazz",vinyl,,,,,,Columbia,"So What; Freddie Freeloader; Blue in Green; All Blues",,,,
-music,Abbey Road,The Beatles,1969,Rock,vinyl,,,,,,Apple,"Come Together; Something; Here Comes the Sun",,,,
-movie,Dune: Part Two,Denis Villeneuve,2024,"Science fiction, Adventure",4K Blu-ray,,,,,,,,166 min,"Timothée Chalamet, Zendaya",,
-movie,Spirited Away,Hayao Miyazaki,2001,"Animation, Fantasy",Blu-ray,"spirits, bathhouse",,,,,,,125 min,"Rumi Hiiragi, Miyu Irino",,
-movie,The Shining,Stanley Kubrick,1980,Horror,DVD,"haunted hotel, winter",,,,,,,146 min,"Jack Nicholson, Shelley Duvall",,
-game,Hades,Supergiant Games,2020,"Roguelike, Action",cartridge,"greek mythology, underworld",,,,,,,,,Nintendo Switch,1
-game,Mass Effect Legendary Edition,BioWare,2021,"RPG, Science fiction",disc,"space, aliens",,,,,,,,,PS5,1
-game,Stardew Valley,ConcernedApe,2016,"Simulation, RPG",digital,"farming, cozy",,,,,,,,,PC,1-4
+media_type,title,creator,year,genre,format,tags,notes,edition,location,origin,condition,isbn,publisher,pages,label,tracklist,runtime,cast,platform,players
+book,Dune,Frank Herbert,1965,"Science fiction, Space opera",paperback,"desert, politics, ecology",,40th anniversary edition,Living room shelf A2,Barnes & Noble,"Spine creased, otherwise good",9780441013593,Ace,604,,,,,,
+book,Mythos,Stephen Fry,2017,"Mythology, Nonfiction",hardcover,greek,,First edition,Living room shelf A2,"Waterstones, London trip",,9781405934138,Michael Joseph,416,,,,,,
+book,The Hobbit,J.R.R. Tolkien,1937,"Fantasy, Adventure",hardcover,"dragons, quest",,,Bedroom bookcase,Gift from Chris,Dust jacket slightly torn,9780547928227,Houghton Mifflin,300,,,,,,
+music,Swimming,Mac Miller,2018,"Hip-Hop, Jazz rap",vinyl,,,"2LP, first pressing",Record shelf,Amoeba Music,Sleeve has a small corner ding,,,,Warner,Come Back to Earth; Hurt Feelings; What's the Use?; Self Care; Ladders,,,,
+music,To Pimp a Butterfly,Kendrick Lamar,2015,"hip hop, jazz-rap, Funk",CD,,,,Media cabinet,,,,,,Top Dawg,Wesley's Theory; King Kunta; Alright; The Blacker the Berry,,,,
+music,Kind of Blue,Miles Davis,1959,"Jazz, Modal jazz",vinyl,,,Legacy Edition reissue,Record shelf,Estate sale,Light surface noise on side B,,,,Columbia,So What; Freddie Freeloader; Blue in Green; All Blues,,,,
+music,Abbey Road,The Beatles,1969,Rock,vinyl,,,2019 Anniversary remix,Record shelf,Gift from Dad,Like new,,,,Apple,Come Together; Something; Here Comes the Sun,,,,
+movie,Dune: Part Two,Denis Villeneuve,2024,"Science fiction, Adventure",4K Blu-ray,,,Steelbook,Media cabinet,Best Buy,Sealed,,,,,,166 min,"Timothée Chalamet, Zendaya",,
+movie,Spirited Away,Hayao Miyazaki,2001,"Animation, Fantasy",Blu-ray,"spirits, bathhouse",,GKIDS Collector's edition,Media cabinet,eBay,Case cracked at hinge,,,,,,125 min,"Rumi Hiiragi, Miyu Irino",,
+movie,The Shining,Stanley Kubrick,1980,Horror,DVD,"haunted hotel, winter",,Extended cut,Storage box 3,Thrift store,"Disc lightly scratched, plays fine",,,,,,146 min,"Jack Nicholson, Shelley Duvall",,
+game,Hades,Supergiant Games,2020,"Roguelike, Action",cartridge,"greek mythology, underworld",,Physical release,Media cabinet,GameStop,Like new,,,,,,,,Nintendo Switch,1
+game,Mass Effect Legendary Edition,BioWare,2021,"RPG, Science fiction",disc,"space, aliens",,,Media cabinet,Amazon,,,,,,,,,PS5,1
+game,Stardew Valley,ConcernedApe,2016,"Simulation, RPG",digital,"farming, cozy",,Digital (Steam),Steam library,Steam sale,,,,,,,,,PC,1-4

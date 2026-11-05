@@ -12,14 +12,14 @@ from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_t
                    send_file, url_for)
 
 from . import covers, metadata
-from .catalog import CORE_FIELDS, CREATOR_LABEL, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
+from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
 
 FIELD_LABELS = {"isbn": "ISBN", "upc": "UPC", "edition_year": "Edition year (your copy)", "cover_url": "Cover image URL", "tracklist": "Track list",
                 "discs": "Discs", "players": "Players"}
 
 
 def label(field: str) -> str:
-    return FIELD_LABELS.get(field, field.replace("_", " ").capitalize())
+    return FIELD_LABELS.get(field) or COPY_LABELS.get(field) or field.replace("_", " ").capitalize()
 
 
 # How each type credits its creator on the details page ("Directed by Denis Villeneuve").
@@ -42,6 +42,17 @@ def detail_rows(item: dict) -> list[tuple[str, str]]:
     if item.get("format"):
         rows.append(("Format", item["format"]))
     return rows
+
+
+def copy_rows(item: dict) -> list[tuple[str, str, str]]:
+    """(field, label, value) for the filled-in "Your copy" fields."""
+    return [(f, COPY_LABELS[f], str(item["extra"][f])) for f in COPY_FIELDS
+            if item["extra"].get(f) not in (None, "")]
+
+
+def browse_url(params: dict, drop=None) -> str:
+    """Browse-page URL with the given filters, leaving out blank ones and `drop`."""
+    return url_for("index", **{k: v for k, v in params.items() if v and k != drop})
 
 
 def split_list(value, sep) -> list[str]:
@@ -71,8 +82,8 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     app = Flask(__name__)
     app.config.update(DB_PATH=str(db_path), SECRET_KEY="encyclomedia-local",
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
-    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list,
-                                 MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS,
+    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url,
+                                 MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
                                  CREATOR_LABEL=CREATOR_LABEL, YEAR_LABEL=YEAR_LABEL, label=label,
                                  semantic_on=embedder is not None)
 
@@ -98,7 +109,10 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         and per media type (for the autocomplete suggestions)."""
         cat = catalog()
         return {"all_genres": cat.genres(),
-                "genres_by_type": {t: [x["name"] for x in cat.genres(t)] for t in MEDIA_TYPES}}
+                "genres_by_type": {t: [x["name"] for x in cat.genres(t)] for t in MEDIA_TYPES},
+                # Autocomplete for places you've already used, so "Shelf A2" stays one spelling.
+                "locations": [v["name"] for v in cat.copy_values("location")],
+                "origins": [v["name"] for v in cat.copy_values("origin")]}
 
     def apply_cover_upload(item_id) -> bool:
         """Save an uploaded cover from the request, if any. Returns False (and flashes why) on a bad file."""
@@ -145,6 +159,8 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         core = {k: f.get(k, "") for k in CORE_FIELDS}
         extra = {k: f.get(f"extra__{k}", "") for k in EXTRA_FIELDS.get(media_type, ())}
         extra["cover_url"] = f.get("cover_url", "")
+        for k in COPY_FIELDS:
+            extra[k] = f.get(f"extra__{k}", "")
         return media_type, core, extra
 
     # ---------------------------------------------------------------- pages
@@ -153,19 +169,23 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         q = request.args.get("q", "").strip()
         media_type = request.args.get("type") or None
         genre = request.args.get("genre") or None
+        location = request.args.get("location", "").strip() or None
+        origin = request.args.get("origin", "").strip() or None
         semantic = request.args.get("mode", "hybrid") != "keyword"
         cat = catalog()
         suggestions = []
         if q:
-            items = cat.search(q, media_type, limit=50, semantic=semantic, genre=genre)
-            if not items and not genre:
+            items = cat.search(q, media_type, limit=50, semantic=semantic, genre=genre,
+                               location=location, origin=origin)
+            if not items and not (genre or location or origin):
                 suggestions = cat.suggest(q)
         else:
-            items = cat.list(media_type, genre)
+            items = cat.list(media_type, genre, location=location, origin=origin)
         genre_options = cat.genres(media_type)
         if genre and genre_key(genre) not in {genre_key(g["name"]) for g in genre_options}:
             genre_options.append({"name": genre, "count": 0})  # keep the active filter selectable
         return render_template("index.html", items=items, q=q, media_type=media_type, genre=genre,
+                               location=location, origin=origin,
                                genre_options=genre_options, mode="hybrid" if semantic else "keyword",
                                counts=cat.counts(), suggestions=suggestions)
 
@@ -211,6 +231,8 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         if source:
             # "Add another copy": same details, ready to adjust for a different edition/format.
             item = {k: v for k, v in source.items() if k not in ("id", "added_at", "updated_at")}
+            # Edition, location, origin and condition describe one physical copy, so start them blank.
+            item["extra"] = {k: v for k, v in source["extra"].items() if k not in COPY_FIELDS}
             item["copy_of"] = source["title"]
         else:
             item = {"media_type": request.args.get("type", "book"), "extra": {}, "genres": []}
@@ -222,6 +244,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         cat = catalog()
         current = cat.get(item_id) or abort(404)
         return render_template("detail.html", item=current, details=detail_rows(current),
+                               copy_details=copy_rows(current),
                                links=external_links(current), related=cat.similar(item_id))
 
     @app.route("/item/<int:item_id>/edit", methods=["GET", "POST"])

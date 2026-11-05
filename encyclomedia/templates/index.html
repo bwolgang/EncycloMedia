@@ -15,6 +15,7 @@
   .card .chips { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
   .cover { width: 54px; height: 72px; border-radius: 4px; background: var(--line); object-fit: cover; }
   .card .sub { font-size: 13px; color: var(--muted); }
+  .card .where { font-size: 12px; color: var(--muted); margin-top: 3px; }
   .score { text-align: right; font-size: 12px; color: var(--muted); white-space: nowrap; }
   .bar { height: 4px; width: 70px; background: var(--line); border-radius: 2px; margin-top: 4px; }
   .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
@@ -41,8 +42,10 @@
       <option value="{{ g.name }}" {{ 'selected' if genre and g.name|lower == genre|lower }}>{{ g.name }} ({{ g.count }})</option>
     {% endfor %}
   </select>
+  {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
+  {% if origin %}<input type="hidden" name="origin" value="{{ origin }}">{% endif %}
   <button class="primary" type="submit">Search</button>
-  {% if q or genre %}<a class="btn" href="{{ url_for('index', type=media_type or '') }}">Clear</a>{% endif %}
+  {% if q or genre or location or origin %}<a class="btn" href="{{ url_for('index', type=media_type or '') }}">Clear</a>{% endif %}
   <div class="meta" style="grid-column: 1 / -1; margin: 0;">
     {% if semantic_on %}
       <label><input type="radio" name="mode" value="hybrid" {{ 'checked' if mode == 'hybrid' }}> Smart (keywords + meaning)</label>
@@ -55,12 +58,16 @@
 
 <div class="meta muted">
   {% for t in MEDIA_TYPES %}<span><b class="t-{{ t }}">{{ counts.get(t, 0) }}</b> {{ t }}{{ '' if t == 'music' else 's' }}</span>{% endfor %}
-  {% if q or genre %}<span>· {{ items|length }} result{{ '' if items|length == 1 else 's' }}{% if q %} for “{{ q }}”{% endif %}</span>{% endif %}
+  {% if q or genre or location or origin %}<span>· {{ items|length }} result{{ '' if items|length == 1 else 's' }}{% if q %} for “{{ q }}”{% endif %}</span>{% endif %}
 </div>
 
-{% if genre %}
-  <div class="active-filter">Genre:
-    <a class="chip active" href="{{ url_for('index', q=q, type=media_type or '') }}" title="Remove filter">{{ genre }} ✕</a>
+{% set keep = {'q': q, 'type': media_type or '', 'genre': genre or '', 'location': location or '', 'origin': origin or ''} %}
+{% if genre or location or origin %}
+  <div class="active-filter">
+    {% for key, name in (('genre', 'Genre'), ('location', 'Location'), ('origin', 'Origin')) if keep[key] %}
+      {{ name }}:
+      <a class="chip active" href="{{ browse_url(keep, drop=key) }}" title="Remove filter">{{ keep[key] }} ✕</a>
+    {% endfor %}
   </div>
 {% endif %}
 
@@ -68,7 +75,7 @@
   <p>No matches. Did you mean
   {% for s in suggestions %}<a href="{{ url_for('index', q=s, type=media_type or '') }}">{{ s }}</a>{{ ', ' if not loop.last else '?' }}{% endfor %}</p>
 {% elif not items %}
-  <p class="muted">{{ 'No matches.' if (q or genre) else 'Nothing here yet. Add an item or import a CSV below.' }}</p>
+  <p class="muted">{{ 'No matches.' if (q or genre or location or origin) else 'Nothing here yet. Add an item or import a CSV below.' }}</p>
 {% endif %}
 
 <ul class="results">
@@ -84,6 +91,7 @@
         {% if it.format %} · {{ it.format }}{% endif %}
         {% if it.extra.platform %} · {{ it.extra.platform }}{% endif %}
       </div>
+      {% if it.extra.location %}<div class="where">Location: {{ it.extra.location }}</div>{% endif %}
       {% if it.genres %}
       <div class="chips">
         {% for g in it.genres %}

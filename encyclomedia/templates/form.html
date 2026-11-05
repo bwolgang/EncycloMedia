@@ -9,6 +9,7 @@
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
   .full { grid-column: 1 / -1; }
   label { display: block; font-size: 13px; color: var(--muted); }
+  label .hint { font-size: 12px; opacity: .75; }
   label > input, label > select, label > textarea { margin-top: 3px; }
   .actions { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
   .actions form { margin-left: auto; }
@@ -50,7 +51,7 @@
 <div class="panel">
   {% if item.id %}<h1>Edit details</h1>
   {% elif item.copy_of %}<h1>Add another copy</h1>
-  <p class="muted" style="margin:-8px 0 14px;font-size:14px">Copied from “{{ item.copy_of }}”. Change what's different about this copy (edition, format, ISBN…), then save.</p>
+  <p class="muted" style="margin:-8px 0 14px;font-size:14px">Copied from “{{ item.copy_of }}”. Fill in what's different about this copy (edition, location, condition, format…), then save.</p>
   {% else %}<h1>Add item</h1>{% endif %}
   <form method="post" id="itemForm" enctype="multipart/form-data">
     <div class="typepick">
@@ -92,8 +93,30 @@
     </fieldset>
     {% endfor %}
 
+    <h2>Your copy</h2>
+    <div class="grid">
+      <label class="full">Edition
+        <input name="extra__edition" value="{{ item.extra.get('edition', '') }}" id="editionInput"
+               placeholder="First edition, Collector's edition, Director's cut, Deluxe…">
+      </label>
+      <label>Location <span class="hint">where it's stored</span>
+        <input name="extra__location" value="{{ item.extra.get('location', '') }}" list="locationList"
+               autocomplete="off" placeholder="Living room shelf A2, Storage box 3…">
+      </label>
+      <label>Origin <span class="hint">where you got it</span>
+        <input name="extra__origin" value="{{ item.extra.get('origin', '') }}" list="originList"
+               autocomplete="off" placeholder="Barnes & Noble, eBay, gift from…">
+      </label>
+      <label class="full">Condition notes
+        <textarea name="extra__condition" rows="2"
+                  placeholder="Like new, cracked case, dust jacket torn, disc scratched…">{{ item.extra.get('condition', '') }}</textarea>
+      </label>
+    </div>
+    <datalist id="locationList">{% for v in locations %}<option value="{{ v }}">{% endfor %}</datalist>
+    <datalist id="originList">{% for v in origins %}<option value="{{ v }}">{% endfor %}</datalist>
+
     <h2>Notes</h2>
-    <textarea name="notes" placeholder="Condition, where it's shelved, who borrowed it…">{{ item.notes or '' }}</textarea>
+    <textarea name="notes" placeholder="Anything else: who's borrowed it, signed copy, memories…">{{ item.notes or '' }}</textarea>
 
     <div class="actions">
       <button class="primary" type="submit">{{ 'Save' if item.id else 'Add to catalog' }}</button>
@@ -146,6 +169,11 @@
 <script>
 const CREATOR_LABEL = {{ CREATOR_LABEL|tojson }};
 const YEAR_LABEL = {{ YEAR_LABEL|tojson }};
+const EDITION_HINT = {
+  book: "First edition, Paperback reprint, Signed limited edition…",
+  music: "Original pressing, 2019 remaster, Deluxe edition…",
+  movie: "Director's cut, Criterion Collection, Steelbook…",
+  game: "Standard, Collector's edition, Game of the Year…"};
 const GENRES_BY_TYPE = {{ genres_by_type|tojson }};
 const form = document.getElementById('itemForm');
 const currentType = () => form.querySelector('input[name=media_type]:checked')?.value || 'book';
@@ -154,6 +182,7 @@ function syncType() {
   const t = currentType();
   document.getElementById('creatorLabel').textContent = CREATOR_LABEL[t];
   document.getElementById('yearLabel').textContent = YEAR_LABEL[t];
+  document.getElementById('editionInput').placeholder = EDITION_HINT[t];
   // Autocomplete only suggests genres already used for this media type.
   const list = document.getElementById('genreList');
   list.replaceChildren(...(GENRES_BY_TYPE[t] || []).map(name => {

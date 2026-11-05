@@ -11,6 +11,7 @@ Command line interface.   python -m encyclomedia <command> ...
   import   bulk import from CSV
   export   write the catalog to CSV
   genres         list genres with item counts
+  locations      list storage locations (or --origins) with item counts
   genre-rename   rename a genre everywhere (or merge it into another)
   genre-remove   take a genre off every item
   reindex  build embeddings for semantic search
@@ -22,7 +23,7 @@ import argparse
 import sys
 
 from . import metadata, semantic
-from .catalog import CORE_FIELDS, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog
+from .catalog import COPY_FIELDS, CORE_FIELDS, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog
 
 
 def parse_kv(pairs) -> dict:
@@ -60,8 +61,18 @@ def add_core_args(p):
     for f in CORE_FIELDS:
         if f != "title":
             p.add_argument(f"--{f}")
+    copy_help = {"edition": "e.g. \"First edition\", \"Director's cut\"",
+                 "location": "where it's stored, e.g. \"Shelf A2\"",
+                 "origin": "where you got it, e.g. \"Gift from Chris\"",
+                 "condition": "condition notes, e.g. \"Like new\""}
+    for f in COPY_FIELDS:
+        p.add_argument(f"--{f}", help=copy_help[f])
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
                    help="type-specific field, repeatable (e.g. --field isbn=978... --field platform=PS5)")
+
+
+def copy_args(args) -> dict:
+    return {f: getattr(args, f) for f in COPY_FIELDS if getattr(args, f, None) is not None}
 
 
 def main(argv=None):
@@ -87,10 +98,17 @@ def main(argv=None):
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--keyword-only", action="store_true", help="skip semantic matching")
     s.add_argument("--genre", help="only items with this genre")
+    s.add_argument("--location", help="only items stored here")
+    s.add_argument("--origin", help="only items acquired from here")
 
     ls = sub.add_parser("list", help="list items")
     ls.add_argument("--type", choices=MEDIA_TYPES)
     ls.add_argument("--genre", help="only items with this genre")
+    ls.add_argument("--location", help="only items stored here")
+    ls.add_argument("--origin", help="only items acquired from here")
+
+    lv = sub.add_parser("locations", help="list storage locations (or --origins) with counts")
+    lv.add_argument("--origins", action="store_true", help="list where items came from instead")
 
     gl = sub.add_parser("genres", help="list genres with counts")
     gl.add_argument("--type", choices=MEDIA_TYPES)
@@ -147,7 +165,7 @@ def main(argv=None):
     try:
         if args.cmd == "add":
             fields = {f: getattr(args, f) for f in CORE_FIELDS if f != "title" and getattr(args, f)}
-            extra = parse_kv(args.field)
+            extra = {**parse_kv(args.field), **copy_args(args)}
             title = args.title
             if args.lookup:
                 cands = metadata.lookup(args.media_type, args.title, limit=1)
@@ -176,7 +194,7 @@ def main(argv=None):
 
         elif args.cmd == "search":
             results = cat.search(args.query, args.type, args.limit, semantic=not args.keyword_only,
-                                 genre=args.genre)
+                                 genre=args.genre, location=args.location, origin=args.origin)
             for it in results:
                 print(one_line(it))
             if not results:
@@ -186,7 +204,7 @@ def main(argv=None):
                     print("Did you mean: " + ", ".join(hint) + "?")
 
         elif args.cmd == "list":
-            items = cat.list(args.type, args.genre)
+            items = cat.list(args.type, args.genre, location=args.location, origin=args.origin)
             for it in items:
                 print(one_line(it))
             if not items:
@@ -198,12 +216,19 @@ def main(argv=None):
                 if it.get(k) not in (None, ""):
                     print(f"{k:>12}: {it[k]}")
             for k, v in it["extra"].items():
-                print(f"{k:>12}: {v}")
+                if k not in COPY_FIELDS:
+                    print(f"{k:>12}: {v}")
+            mine = [(k, it["extra"][k]) for k in COPY_FIELDS if it["extra"].get(k)]
+            if mine:
+                print("   Your copy:")
+                for k, v in mine:
+                    print(f"{k:>12}: {v}")
 
         elif args.cmd == "edit":
             fields = {f: getattr(args, f) for f in CORE_FIELDS if getattr(args, f) is not None}
             current = cat.get(args.id) or sys.exit("No item with that id.")
-            extra = {**current["extra"], **parse_kv(args.field)} if args.field else None
+            changes = {**parse_kv(args.field), **copy_args(args)}
+            extra = {**current["extra"], **changes} if changes else None
             cat.update(args.id, extra=extra, **fields)
             print("Saved.")
 
@@ -214,6 +239,14 @@ def main(argv=None):
                 print(f"  {g['name']:<{width}}  {g['count']}")
             if not rows:
                 print("No genres yet.")
+
+        elif args.cmd == "locations":
+            rows = cat.copy_values("origin" if args.origins else "location")
+            width = max((len(v["name"]) for v in rows), default=0)
+            for v in rows:
+                print(f"  {v['name']:<{width}}  {v['count']}")
+            if not rows:
+                print("None recorded yet.")
 
         elif args.cmd == "genre-rename":
             n = cat.rename_genre(args.old, args.new)
