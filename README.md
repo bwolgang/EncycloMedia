@@ -22,14 +22,33 @@ original single-file script, run with `--db ~/.media_catalog.db` and that databa
 | `web.py` + `templates/` | Flask web interface |
 | `__main__.py` | Command line interface |
 
+### Credits
+Each media type has its own credit fields. The main credit is shown first:
+
+| Type | Main credit | Other credits |
+|---|---|---|
+| book | Author | Illustrator (for comics and graphic novels) |
+| movie | Director | Composer (of the score) |
+| music | Artist | Performers (featured performers), Record label |
+| game | Game studio | Game designer |
+
+- Separate several names with commas, e.g. `Bilal, Anna Wise`.
+- In the form, these fields sit next to the main credit and change when you switch the media type.
+- The details page shows a **Credits** section. Clicking a person lists everything in your catalog that
+  credits them. People are also searchable, and a shared composer, performer or designer counts toward
+  **More like this**.
+- Auto-fill fills in a movie's composer from TMDB, and an album's featured performers ("feat.") and record
+  label from MusicBrainz.
+- Earlier versions labelled games' main credit "Developer"; those studio names now show as **Game studio**.
+
 ### Type-specific fields
 Every item has title, creator, year, genre, format, tags and notes. Each type also has its own fields,
 stored as JSON and included in search:
 
-- **book**: isbn, edition_year, publisher, pages, series
-- **music**: barcode, edition_year, label, tracklist, discs
-- **movie**: upc, runtime, rating, cast
-- **game**: platform, publisher, players, barcode
+- **book**: illustrator, isbn, edition_year, publisher, pages, series
+- **music**: performers, label (record label), barcode, edition_year, tracklist, discs
+- **movie**: composer, upc, runtime, rating, cast
+- **game**: designer, platform, publisher, players, barcode
 
 `year` is always the **original** release: when the book was first published or the album first
 came out. `edition_year` is when your particular copy was printed or pressed, for example a 2012
@@ -130,6 +149,10 @@ python -m encyclomedia add movie "Arrival" --edition "4K Steelbook" --location "
     --origin "Best Buy" --condition "Sealed"
 python -m encyclomedia edit 3 --location "Storage box 3"
 python -m encyclomedia list --location "media cabinet"
+python -m encyclomedia add book "Watchmen" --creator "Alan Moore" --illustrator "Dave Gibbons"
+python -m encyclomedia add movie "Interstellar" --creator "Christopher Nolan" --composer "Hans Zimmer"
+python -m encyclomedia add music "Faces" --creator "Mac Miller" --performers "Rick Ross" --label "REMember"
+python -m encyclomedia add game "Stardew Valley" --creator "ConcernedApe" --designer "Eric Barone"
 python -m encyclomedia locations                                # or: locations --origins
 python -m encyclomedia search "mac" --genre hip-hop
 python -m encyclomedia genres --type music

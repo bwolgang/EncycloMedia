@@ -31,7 +31,9 @@
   .facts dt, .facts dd { margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); }
   .facts dt { color: var(--muted); font-size: 13px; padding-right: 24px; }
   .facts dt:last-of-type, .facts dd:last-of-type { border-bottom: 0; }
-  .facts.copy { margin-bottom: 0; }
+  .facts.copy, .facts.credits { margin-bottom: 0; }
+  .facts.credits dd a { color: inherit; text-decoration-color: var(--line); }
+  .facts.credits dd a:hover { color: var(--accent); }
   .facts.copy dd a { color: inherit; text-decoration-color: var(--line); }
   .facts.copy dd a:hover { color: var(--accent); }
   .facts .multiline { white-space: pre-wrap; }
@@ -125,6 +127,22 @@
       <div class="chips">
         {% for g in item.genres %}<a class="chip" href="{{ url_for('index', genre=g) }}">{{ g }}</a>{% endfor %}
       </div>
+    {% endif %}
+
+    {% if credits|length > 1 %}
+      <section>
+        <h2>Credits</h2>
+        <dl class="facts credits">
+          {% for name, people, searchable in credits %}
+            <dt>{{ name }}</dt>
+            <dd>
+              {% for person in people %}
+                {% if searchable %}<a href="{{ url_for('index', q=person) }}" title="Everything with {{ person }}">{{ person }}</a>{% else %}{{ person }}{% endif %}{{ ', ' if not loop.last }}
+              {% endfor %}
+            </dd>
+          {% endfor %}
+        </dl>
+      </section>
     {% endif %}
 
     {% if details %}

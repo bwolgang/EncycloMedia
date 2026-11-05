@@ -12,14 +12,15 @@ from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_t
                    send_file, url_for)
 
 from . import covers, metadata
-from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
+from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, CREDIT_FIELDS, CREDIT_LABELS, split_names, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
 
 FIELD_LABELS = {"isbn": "ISBN", "upc": "UPC", "edition_year": "Edition year (your copy)", "cover_url": "Cover image URL", "tracklist": "Track list",
                 "discs": "Discs", "players": "Players"}
 
 
 def label(field: str) -> str:
-    return FIELD_LABELS.get(field) or COPY_LABELS.get(field) or field.replace("_", " ").capitalize()
+    return (FIELD_LABELS.get(field) or CREDIT_LABELS.get(field) or COPY_LABELS.get(field)
+            or field.replace("_", " ").capitalize())
 
 
 # How each type credits its creator on the details page ("Directed by Denis Villeneuve").
@@ -35,12 +36,28 @@ def detail_rows(item: dict) -> list[tuple[str, str]]:
     rows = []
     if item.get("year"):
         rows.append((YEAR_LABEL[item["media_type"]], str(item["year"])))
+    credits = CREDIT_FIELDS.get(item["media_type"], ())
     for field in EXTRA_FIELDS.get(item["media_type"], ()):
         value = item["extra"].get(field)
-        if value not in (None, "") and field not in LIST_FIELDS and field not in HIDDEN_FIELDS:
+        if value not in (None, "") and field not in LIST_FIELDS and field not in HIDDEN_FIELDS \
+                and field not in credits:
             rows.append((label(field), str(value)))
     if item.get("format"):
         rows.append(("Format", item["format"]))
+    return rows
+
+
+def credit_rows(item: dict) -> list[tuple[str, list[str], bool]]:
+    """(label, names, searchable) for the details page's Credits section, main credit first.
+    People are links that search the catalog; a record label is shown as plain text."""
+    t = item["media_type"]
+    rows = []
+    if item.get("creator"):
+        rows.append((CREATOR_LABEL[t], split_names(item["creator"]), True))
+    for field in CREDIT_FIELDS.get(t, ()):
+        names = split_names(item["extra"].get(field))
+        if names:
+            rows.append((CREDIT_LABELS[field], names, field != "label"))
     return rows
 
 
@@ -84,6 +101,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
     app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url,
                                  MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
+                                 CREDIT_FIELDS=CREDIT_FIELDS,
                                  CREATOR_LABEL=CREATOR_LABEL, YEAR_LABEL=YEAR_LABEL, label=label,
                                  semantic_on=embedder is not None)
 
@@ -244,7 +262,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         cat = catalog()
         current = cat.get(item_id) or abort(404)
         return render_template("detail.html", item=current, details=detail_rows(current),
-                               copy_details=copy_rows(current),
+                               copy_details=copy_rows(current), credits=credit_rows(current),
                                links=external_links(current), related=cat.similar(item_id))
 
     @app.route("/item/<int:item_id>/edit", methods=["GET", "POST"])

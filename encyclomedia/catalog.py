@@ -35,8 +35,22 @@ MEDIA_TYPES = ("book", "music", "movie", "game")
 # Fields every item has.
 CORE_FIELDS = ("title", "creator", "year", "genre", "format", "tags", "notes")
 
-# What "creator" means for each type (used for labels in the UI).
-CREATOR_LABEL = {"book": "Author", "music": "Artist", "movie": "Director", "game": "Developer"}
+# What "creator" (the main credit) means for each type. For games it is the studio
+# that made the game, which is what earlier versions stored there as "Developer".
+CREATOR_LABEL = {"book": "Author", "music": "Artist", "movie": "Director", "game": "Game studio"}
+
+# Further credits for each type, shown next to the main credit. Stored in the JSON
+# `extra` column. Names can be comma separated ("Bilal, Anna Wise").
+CREDIT_FIELDS = {
+    "book": ("illustrator",),
+    "music": ("performers", "label"),
+    "movie": ("composer",),
+    "game": ("designer",),
+}
+CREDIT_LABELS = {"illustrator": "Illustrator", "performers": "Performers", "label": "Record label",
+                 "composer": "Composer", "designer": "Game designer"}
+# Credits that name people (as opposed to a record label), used for "More like this".
+PEOPLE_FIELDS = ("illustrator", "performers", "composer", "designer")
 
 # What "year" means for each type. It is always the original release, so a 1937
 # novel says 1937 even if your copy is a 2012 printing; that goes in edition_year.
@@ -50,12 +64,18 @@ COPY_LABELS = {"edition": "Edition", "location": "Location", "origin": "Origin",
                "condition": "Condition notes"}
 
 # Type-specific fields, stored in the JSON `extra` column.
+# Credit fields come first so CSV exports and forms list them together.
 EXTRA_FIELDS = {
-    "book": ("isbn", "edition_year", "publisher", "pages", "series", "cover_url"),
-    "music": ("barcode", "edition_year", "label", "tracklist", "discs", "cover_url"),
-    "movie": ("upc", "runtime", "rating", "cast", "cover_url"),
-    "game": ("platform", "publisher", "players", "barcode", "cover_url"),
+    "book": (*CREDIT_FIELDS["book"], "isbn", "edition_year", "publisher", "pages", "series", "cover_url"),
+    "music": (*CREDIT_FIELDS["music"], "barcode", "edition_year", "tracklist", "discs", "cover_url"),
+    "movie": (*CREDIT_FIELDS["movie"], "upc", "runtime", "rating", "cast", "cover_url"),
+    "game": (*CREDIT_FIELDS["game"], "platform", "publisher", "players", "barcode", "cover_url"),
 }
+
+
+def split_names(value) -> list[str]:
+    """'Bilal, Anna Wise;Thundercat' -> ['Bilal', 'Anna Wise', 'Thundercat']."""
+    return [n.strip() for n in re.split(r"[,;\n]", str(value or "")) if n.strip()]
 
 # Ranking weights per FTS column (same order as the items_fts definition).
 WEIGHTS = {"title": 10.0, "creator": 6.0, "genre": 3.0, "tags": 3.0, "notes": 1.0, "extra_text": 2.0}
@@ -606,7 +626,7 @@ class Catalog:
     def similar(self, item_id, limit=6) -> list[dict]:
         """Items related to this one, best first, each with a short `reason`.
 
-        Signals: same creator, related title (e.g. the Dune novel and the Dune films),
+        Signals: same creator or other shared credits (composer, performer...), related title (e.g. the Dune novel and the Dune films),
         shared genres, shared tags, and, when semantic search is on, similar subject matter.
         """
         item = self.get(item_id)
@@ -614,6 +634,8 @@ class Catalog:
             return []
         my_genres = {genre_key(g): g for g in item["genres"]}
         my_creator = (item.get("creator") or "").strip().casefold()
+        people = lambda it: {n.casefold(): n for f in PEOPLE_FIELDS for n in split_names(it["extra"].get(f))}
+        my_people = {**people(item), **{n.casefold(): n for n in split_names(item.get("creator"))}}
         my_words = self._title_words(item["title"])
         tag_set = lambda text: {genre_key(t): t.strip() for t in (text or "").split(",") if genre_key(t)}
         my_tags = tag_set(item.get("tags"))
@@ -637,6 +659,13 @@ class Catalog:
             if my_creator and (other.get("creator") or "").strip().casefold() == my_creator:
                 score += 3
                 reasons.append(f"Also by {item['creator']}")
+            else:
+                # Shared composer, illustrator, performer, designer... (e.g. Hans Zimmer scores)
+                theirs = {**people(other), **{n.casefold(): n for n in split_names(other.get("creator"))}}
+                shared_people = [my_people[k] for k in my_people if k in theirs]
+                if shared_people:
+                    score += 2.5
+                    reasons.append("Also with " + ", ".join(shared_people[:2]))
             if my_words & self._title_words(other["title"]):
                 score += 2.5
                 reasons.append("Related title")

@@ -741,3 +741,106 @@ def test_cli_copy_fields(tmp_path, capsys):
     main(["--db", db, "--no-semantic", "show", "2"])
     out = capsys.readouterr().out
     assert "Your copy:" in out and "Spine creased" in out and "Shelf A2" in out
+
+
+# --------------------------------------------------------------------------- per-type credits
+def test_credit_fields_per_type():
+    from encyclomedia.catalog import CREATOR_LABEL, CREDIT_FIELDS, EXTRA_FIELDS
+    assert CREATOR_LABEL == {"book": "Author", "music": "Artist", "movie": "Director", "game": "Game studio"}
+    assert CREDIT_FIELDS == {"book": ("illustrator",), "music": ("performers", "label"),
+                             "movie": ("composer",), "game": ("designer",)}
+    for t, fields in CREDIT_FIELDS.items():
+        assert EXTRA_FIELDS[t][:len(fields)] == fields  # stored with the type, listed first
+
+
+def test_credits_are_saved_searchable_and_round_trip(cat, tmp_path):
+    cat.add("book", "Watchmen", creator="Alan Moore", extra={"illustrator": "Dave Gibbons"})
+    cat.add("movie", "Interstellar", creator="Christopher Nolan", extra={"composer": "Hans Zimmer"})
+    cat.add("music", "Faces", creator="Mac Miller", extra={"performers": "Earl Sweatshirt, Rick Ross",
+                                                          "label": "REMember Music"})
+    cat.add("game", "Stardew Valley", creator="ConcernedApe", extra={"designer": "Eric Barone"})
+    assert cat.search("gibbons")[0]["title"] == "Watchmen"
+    assert cat.search("zimmer")[0]["title"] == "Interstellar"
+    assert cat.search("earl sweatshirt")[0]["title"] == "Faces"
+    assert cat.search("barone")[0]["title"] == "Stardew Valley"
+    copy = Catalog(tmp_path / "copy.db")
+    copy.import_csv(io.StringIO(cat.export_csv()))
+    assert copy.search("watchmen")[0]["extra"]["illustrator"] == "Dave Gibbons"
+    assert copy.search("faces")[0]["extra"]["label"] == "REMember Music"
+
+
+def test_shared_credits_power_more_like_this(cat):
+    dune2 = cat.search("part two")[0]
+    cat.update(dune2["id"], extra={**dune2["extra"], "composer": "Hans Zimmer"})
+    inter = cat.add("movie", "Interstellar", creator="Christopher Nolan", extra={"composer": "Hans Zimmer"})
+    related = {r["title"]: r["reason"] for r in cat.similar(inter)}
+    assert related["Dune: Part Two"] == "Also with Hans Zimmer"
+
+
+def test_details_page_credits_section(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    tpab = cat.add("music", "To Pimp a Butterfly", creator="Kendrick Lamar",
+                   extra={"performers": "Bilal, Anna Wise", "label": "Top Dawg"})
+    page = client.get(f"/item/{tpab}").get_data(as_text=True)
+    for text in ("<h2>Credits</h2>", "<dt>Artist</dt>", "<dt>Performers</dt>", "<dt>Record label</dt>",
+                 'href="/?q=Bilal"', 'href="/?q=Anna+Wise"', "Top Dawg"):
+        assert text in page, text
+    assert 'href="/?q=Top+Dawg"' not in page        # the label isn't a person to search for
+    assert page.count("Top Dawg") == 1              # not repeated in the details table
+
+    # A game: the studio is the main credit, the designer sits beside it.
+    hades = cat.search("hades")[0]
+    cat.update(hades["id"], extra={**hades["extra"], "designer": "Greg Kasavin"})
+    page = client.get(f"/item/{hades['id']}").get_data(as_text=True)
+    assert "<dt>Game studio</dt>" in page and "<dt>Game designer</dt>" in page
+
+    # With only the main credit, the header line covers it and no Credits section is shown.
+    mythos = cat.search("mythos")[0]
+    assert "<h2>Credits</h2>" not in client.get(f"/item/{mythos['id']}").get_data(as_text=True)
+
+
+def test_form_shows_and_saves_each_types_credits(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    page = client.get("/add?type=book").get_data(as_text=True)
+    for name in ("illustrator", "performers", "label", "composer", "designer"):
+        assert f'name="extra__{name}"' in page and page.count(f'name="extra__{name}"') == 1, name
+    assert "Game studio" in page                        # creator label for games, used by the script
+    # Only the submitted type's credits are kept, even if other types' boxes were filled.
+    client.post("/add", data={"media_type": "movie", "title": "Arrival", "creator": "Denis Villeneuve",
+                              "extra__composer": "Jóhann Jóhannsson", "extra__illustrator": "ignored"})
+    arrival = cat.search("arrival")[0]
+    assert arrival["extra"].get("composer") == "Jóhann Jóhannsson" and "illustrator" not in arrival["extra"]
+
+
+def test_lookup_parsers_fill_credits():
+    r = {"id": "x", "title": "Wesley's Theory",
+         "artist-credit": [{"name": "Kendrick Lamar", "joinphrase": " feat. "},
+                           {"name": "George Clinton", "joinphrase": " & "},
+                           {"name": "Thundercat", "joinphrase": ""}]}
+    c = metadata.parse_musicbrainz_release(r)
+    assert c["creator"] == "Kendrick Lamar" and c["extra"]["performers"] == "George Clinton, Thundercat"
+    joint = metadata.parse_musicbrainz_release({"id": "y", "title": "Watch the Throne", "artist-credit": [
+        {"name": "JAY-Z", "joinphrase": " & "}, {"name": "Kanye West", "joinphrase": ""}]})
+    assert joint["creator"] == "JAY-Z & Kanye West" and "performers" not in joint["extra"]
+    m = metadata.parse_tmdb_movie({"id": 1, "title": "Dune: Part Two", "credits": {"crew": [
+        {"job": "Director", "name": "Denis Villeneuve"},
+        {"job": "Original Music Composer", "name": "Hans Zimmer"}]}})
+    assert m["creator"] == "Denis Villeneuve" and m["extra"]["composer"] == "Hans Zimmer"
+
+
+def test_cli_credit_options(tmp_path, capsys):
+    from encyclomedia.__main__ import main
+    db = str(tmp_path / "cli.db")
+    main(["--db", db, "--no-semantic", "add", "book", "Watchmen", "--creator", "Alan Moore",
+          "--illustrator", "Dave Gibbons"])
+    main(["--db", db, "--no-semantic", "add", "music", "Faces", "--performers", "Rick Ross", "--label", "REMember"])
+    with pytest.raises(SystemExit, match="--composer is for movies"):
+        main(["--db", db, "--no-semantic", "add", "book", "Dune", "--composer", "Hans Zimmer"])
+    main(["--db", db, "--no-semantic", "edit", "1", "--illustrator", "Dave Gibbons, John Higgins"])
+    capsys.readouterr()
+    main(["--db", db, "--no-semantic", "show", "1"])
+    assert "Dave Gibbons, John Higgins" in capsys.readouterr().out

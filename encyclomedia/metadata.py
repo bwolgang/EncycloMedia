@@ -151,9 +151,28 @@ def _musicbrainz(path, params):
     return _http(f"{MUSICBRAINZ}/{path}", {**params, "fmt": "json"})
 
 
-def _artist_credit(credits) -> str | None:
-    text = "".join(c.get("name", "") + c.get("joinphrase", "") for c in credits or [])
-    return text or None
+_FEATURING = re.compile(r"\b(feat\.?|featuring|ft\.?|with)\b", re.I)
+
+
+def _artist_credit(credits) -> tuple[str | None, str | None]:
+    """Split a MusicBrainz artist credit into (main artist, featured performers).
+
+    "Kendrick Lamar feat. Bilal & Anna Wise" -> ("Kendrick Lamar", "Bilal, Anna Wise").
+    Joint credits without "feat." ("Jay-Z & Kanye West") stay together as the artist.
+    """
+    main, featured, in_featured = "", [], False
+    for c in credits or []:
+        name = c.get("name", "")
+        if in_featured:
+            featured.append(name)
+        else:
+            main += name
+        join = c.get("joinphrase", "")
+        if not in_featured and _FEATURING.search(join):
+            in_featured = True
+        elif not in_featured:
+            main += join
+    return (main.strip() or None), (", ".join(featured) or None)
 
 
 def parse_musicbrainz_release(r: dict) -> dict:
@@ -162,13 +181,15 @@ def parse_musicbrainz_release(r: dict) -> dict:
     media = r.get("media") or []
     label_info = r.get("label-info") or []
     tracks = [t.get("title") for m in media for t in m.get("tracks", []) if t.get("title")]
+    artist, performers = _artist_credit(r.get("artist-credit"))
     return _candidate(
         "music", r.get("title"), "MusicBrainz",
-        creator=_artist_credit(r.get("artist-credit")),
+        creator=artist,
         year=_year((r.get("release-group") or {}).get("first-release-date")),
         genre=", ".join(g["name"] for g in (r.get("genres") or [])[:3]) or None,
         format=media[0].get("format") if media else None,
-        extra={"barcode": r.get("barcode"),
+        extra={"performers": performers,
+               "barcode": r.get("barcode"),
                "edition_year": _year(r.get("date")),
                "label": (label_info[0].get("label") or {}).get("name") if label_info else None,
                "discs": len(media) or None,
@@ -210,6 +231,8 @@ def _tmdb(path, params=None):
 def parse_tmdb_movie(d: dict) -> dict:
     credits = d.get("credits") or {}
     directors = [c["name"] for c in credits.get("crew", []) if c.get("job") == "Director"]
+    composers = [c["name"] for c in credits.get("crew", [])
+                 if c.get("job") in ("Original Music Composer", "Music", "Composer")]
     rating = None
     for country in (d.get("release_dates") or {}).get("results", []):
         if country.get("iso_3166_1") == "US":
@@ -220,7 +243,8 @@ def parse_tmdb_movie(d: dict) -> dict:
         year=_year(d.get("release_date")),
         genre=", ".join(g["name"] for g in d.get("genres", [])) or None,
         notes=d.get("overview") or None,
-        extra={"runtime": f"{d['runtime']} min" if d.get("runtime") else None,
+        extra={"composer": ", ".join(dict.fromkeys(composers)) or None,
+               "runtime": f"{d['runtime']} min" if d.get("runtime") else None,
                "rating": rating,
                "cast": ", ".join(c["name"] for c in credits.get("cast", [])[:6]) or None,
                "tmdb_id": d.get("id"),

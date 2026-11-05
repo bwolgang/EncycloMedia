@@ -23,7 +23,7 @@ import argparse
 import sys
 
 from . import metadata, semantic
-from .catalog import COPY_FIELDS, CORE_FIELDS, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog
+from .catalog import COPY_FIELDS, CORE_FIELDS, CREDIT_FIELDS, CREDIT_LABELS, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog
 
 
 def parse_kv(pairs) -> dict:
@@ -67,12 +67,24 @@ def add_core_args(p):
                  "condition": "condition notes, e.g. \"Like new\""}
     for f in COPY_FIELDS:
         p.add_argument(f"--{f}", help=copy_help[f])
+    used_by = {f: t for t, fs in CREDIT_FIELDS.items() for f in fs}
+    for f in used_by:
+        p.add_argument(f"--{f}", help=f"{CREDIT_LABELS[f].lower()} ({used_by[f]}s); separate several with commas")
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
                    help="type-specific field, repeatable (e.g. --field isbn=978... --field platform=PS5)")
 
 
 def copy_args(args) -> dict:
-    return {f: getattr(args, f) for f in COPY_FIELDS if getattr(args, f, None) is not None}
+    """Copy and credit options given on the command line, as extra fields."""
+    names = (*COPY_FIELDS, *{f for fs in CREDIT_FIELDS.values() for f in fs})
+    return {f: getattr(args, f) for f in names if getattr(args, f, None) is not None}
+
+
+def check_credits(media_type, extra):
+    for t, fields in CREDIT_FIELDS.items():
+        for f in fields:
+            if f in extra and f not in CREDIT_FIELDS[media_type]:
+                sys.exit(f"--{f} is for {t}s; a {media_type} doesn't have {CREDIT_LABELS[f].lower()}.")
 
 
 def main(argv=None):
@@ -166,6 +178,7 @@ def main(argv=None):
         if args.cmd == "add":
             fields = {f: getattr(args, f) for f in CORE_FIELDS if f != "title" and getattr(args, f)}
             extra = {**parse_kv(args.field), **copy_args(args)}
+            check_credits(args.media_type, copy_args(args))
             title = args.title
             if args.lookup:
                 cands = metadata.lookup(args.media_type, args.title, limit=1)
@@ -227,6 +240,7 @@ def main(argv=None):
         elif args.cmd == "edit":
             fields = {f: getattr(args, f) for f in CORE_FIELDS if getattr(args, f) is not None}
             current = cat.get(args.id) or sys.exit("No item with that id.")
+            check_credits(current["media_type"], copy_args(args))
             changes = {**parse_kv(args.field), **copy_args(args)}
             extra = {**current["extra"], **changes} if changes else None
             cat.update(args.id, extra=extra, **fields)
