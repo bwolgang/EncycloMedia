@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set active_tab = item.media_type %}
 {% block title %}{{ item.title }} · EncycloMedia{% endblock %}
 {% block head %}
 <style>
@@ -72,7 +73,7 @@
 {% set t = item.media_type %}
 <nav class="crumbs">
   <a href="{{ url_for('index') }}">Catalog</a> ›
-  <a href="{{ url_for('index', type=t) }}">{{ 'Music' if t == 'music' else t|capitalize ~ 's' }}</a> ›
+  <a href="{{ browse_url({'type': t}) }}">{{ TYPE_TITLE[t] }}</a> ›
   {{ item.title }}
 </nav>
 
@@ -125,7 +126,8 @@
 
     {% if item.genres %}
       <div class="chips">
-        {% for g in item.genres %}<a class="chip" href="{{ url_for('index', genre=g) }}">{{ g }}</a>{% endfor %}
+        {% for g in item.genres %}<a class="chip" href="{{ browse_url({'type': t, 'genre': g}) }}"
+           title="{{ TYPE_TITLE[t] }} in {{ g }}">{{ g }}</a>{% endfor %}
       </div>
     {% endif %}
 

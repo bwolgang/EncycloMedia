@@ -1,10 +1,23 @@
 {% extends "base.html" %}
+{% set active_tab = media_type or 'all' %}
+{% set t = media_type %}
+{% set filtering = q or genre or location or origin %}
+{% block title %}{{ TYPE_TITLE[t] ~ ' · ' if t }}EncycloMedia{% endblock %}
 {% block head %}
 <style>
-  .search { display: grid; grid-template-columns: 1fr 130px 170px auto auto; gap: 8px; margin-bottom: 10px; }
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+               margin-bottom: 18px; }
+  .page-head h1 { font-family: Georgia, "Times New Roman", serif; font-size: 30px; margin: 0; line-height: 1.1; }
+  .page-head .stats { font-size: 14px; margin-top: 4px; }
+  .page-head .actions { display: flex; gap: 8px; }
+  .search { display: grid; grid-template-columns: 1fr {{ '130px ' if not t }}170px auto auto; gap: 8px; margin-bottom: 10px; }
   .meta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 18px; font-size: 14px; }
   .meta label { display: flex; gap: 5px; align-items: center; }
   .meta input[type=radio] { width: auto; }
+  .listbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+             margin-bottom: 14px; font-size: 14px; }
+  .listbar label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .listbar select { width: auto; padding: 5px 8px; }
   .results { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
   .card { position: relative; display: grid; grid-template-columns: 54px 1fr auto; gap: 14px; align-items: center;
           background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
@@ -19,24 +32,51 @@
   .score { text-align: right; font-size: 12px; color: var(--muted); white-space: nowrap; }
   .bar { height: 4px; width: 70px; background: var(--line); border-radius: 2px; margin-top: 4px; }
   .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-  .active-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; font-size: 14px; }
+  .active-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; font-size: 14px; flex-wrap: wrap; }
+  .empty { text-align: center; padding: 40px 16px; background: var(--panel); border: 1px dashed var(--line);
+           border-radius: 12px; }
+  .empty p { margin: 0 0 14px; }
   .import { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line);
             display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
   .import input { width: auto; }
   @media (max-width: 640px) {
     .search { grid-template-columns: 1fr 1fr; } .search input[name=q] { grid-column: 1 / -1; }
     .card { grid-template-columns: 44px 1fr; } .cover { width: 44px; height: 60px; } .score { display: none; }
+    .page-head h1 { font-size: 26px; }
   }
 </style>
 {% endblock %}
 {% block content %}
-<form class="search" method="get" action="{{ url_for('index') }}" id="searchForm">
-  <input name="q" value="{{ q }}" placeholder="Search titles, people, genres, tags, notes…" autofocus>
-  <select name="type" onchange="this.form.genre.value=''; this.form.submit()">
+{% set total = nav_counts.get(t, 0) if t else nav_counts.values()|sum %}
+<div class="page-head">
+  <div>
+    <h1 class="{{ 't-' ~ t if t }}">{{ TYPE_TITLE[t] if t else 'Your catalog' }}</h1>
+    <div class="stats muted">
+      {% if t %}
+        {{ total }} {{ ITEM_NOUN[t] }}{{ '' if total == 1 else 's' }}
+        {% if genre_options %} · {{ genre_options|length }} genre{{ '' if genre_options|length == 1 else 's' }}{% endif %}
+      {% else %}
+        {{ total }} item{{ '' if total == 1 else 's' }} across books, music, movies and games
+      {% endif %}
+    </div>
+  </div>
+  {% if t %}
+  <div class="actions">
+    <a class="btn primary" href="{{ url_for('add', type=t) }}">Add {{ 'an album' if t == 'music' else 'a ' ~ ITEM_NOUN[t] }}</a>
+  </div>
+  {% endif %}
+</div>
+
+<form class="search" method="get" action="{{ browse_url({'type': t}) }}" id="searchForm">
+  <input name="q" value="{{ q }}" autofocus
+         placeholder="{{ 'Search ' ~ TYPE_TITLE[t]|lower ~ ': titles, people, genres, tags, notes…' if t else 'Search titles, people, genres, tags, notes…' }}">
+  {% if not t %}
+  <select name="type" onchange="this.form.genre.value=''; this.form.submit()" aria-label="Media type">
     <option value="">All media</option>
-    {% for t in MEDIA_TYPES %}<option value="{{ t }}" {{ 'selected' if media_type == t }}>{{ t|capitalize }}</option>{% endfor %}
+    {% for m in MEDIA_TYPES %}<option value="{{ m }}">{{ TYPE_TITLE[m] }}</option>{% endfor %}
   </select>
-  <select name="genre" onchange="this.form.submit()">
+  {% endif %}
+  <select name="genre" onchange="this.form.submit()" aria-label="Genre">
     <option value="">All genres</option>
     {% for g in genre_options %}
       <option value="{{ g.name }}" {{ 'selected' if genre and g.name|lower == genre|lower }}>{{ g.name }} ({{ g.count }})</option>
@@ -44,8 +84,9 @@
   </select>
   {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
   {% if origin %}<input type="hidden" name="origin" value="{{ origin }}">{% endif %}
+  {% if sort != sorts[0][0] %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
   <button class="primary" type="submit">Search</button>
-  {% if q or genre or location or origin %}<a class="btn" href="{{ url_for('index', type=media_type or '') }}">Clear</a>{% endif %}
+  {% if filtering %}<a class="btn" href="{{ browse_url({'type': t}) }}">Clear</a>{% endif %}
   <div class="meta" style="grid-column: 1 / -1; margin: 0;">
     {% if semantic_on %}
       <label><input type="radio" name="mode" value="hybrid" {{ 'checked' if mode == 'hybrid' }}> Smart (keywords + meaning)</label>
@@ -56,12 +97,8 @@
   </div>
 </form>
 
-<div class="meta muted">
-  {% for t in MEDIA_TYPES %}<span><b class="t-{{ t }}">{{ counts.get(t, 0) }}</b> {{ t }}{{ '' if t == 'music' else 's' }}</span>{% endfor %}
-  {% if q or genre or location or origin %}<span>· {{ items|length }} result{{ '' if items|length == 1 else 's' }}{% if q %} for “{{ q }}”{% endif %}</span>{% endif %}
-</div>
-
-{% set keep = {'q': q, 'type': media_type or '', 'genre': genre or '', 'location': location or '', 'origin': origin or ''} %}
+{% set keep = {'q': q, 'type': t or '', 'genre': genre or '', 'location': location or '', 'origin': origin or '',
+               'sort': sort if sort != sorts[0][0] else ''} %}
 {% if genre or location or origin %}
   <div class="active-filter">
     {% for key, name in (('genre', 'Genre'), ('location', 'Location'), ('origin', 'Origin')) if keep[key] %}
@@ -71,11 +108,43 @@
   </div>
 {% endif %}
 
+{% if items %}
+<div class="listbar">
+  <span class="muted">
+    {% if filtering %}{{ items|length }} result{{ '' if items|length == 1 else 's' }}{% if q %} for “{{ q }}”{% endif %}
+    {% else %}Showing all {{ items|length }}{% endif %}
+  </span>
+  {% if q %}
+    <span class="muted">Best matches first</span>
+  {% else %}
+  <form method="get" action="{{ browse_url({'type': t}) }}">
+    {% for key in ('genre', 'location', 'origin') if keep[key] %}<input type="hidden" name="{{ key }}" value="{{ keep[key] }}">{% endfor %}
+    <label>Sort by
+      <select name="sort" onchange="this.form.submit()">
+        {% for value, name in sorts %}<option value="{{ value }}" {{ 'selected' if sort == value }}>{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+    <noscript><button type="submit">Sort</button></noscript>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if suggestions %}
   <p>No matches. Did you mean
-  {% for s in suggestions %}<a href="{{ url_for('index', q=s, type=media_type or '') }}">{{ s }}</a>{{ ', ' if not loop.last else '?' }}{% endfor %}</p>
+  {% for s in suggestions %}<a href="{{ browse_url({'type': t, 'q': s}) }}">{{ s }}</a>{{ ', ' if not loop.last else '?' }}{% endfor %}</p>
+{% elif not items and filtering %}
+  <p class="muted">No matches.</p>
 {% elif not items %}
-  <p class="muted">{{ 'No matches.' if (q or genre or location or origin) else 'Nothing here yet. Add an item or import a CSV below.' }}</p>
+  <div class="empty">
+    {% if t %}
+      <p>No {{ TYPE_TITLE[t]|lower if t == 'music' else ITEM_NOUN[t] ~ 's' }} in your catalog yet.</p>
+      <a class="btn primary" href="{{ url_for('add', type=t) }}">Add {{ 'an album' if t == 'music' else 'a ' ~ ITEM_NOUN[t] }}</a>
+    {% else %}
+      <p>Nothing here yet. Add an item, or import a CSV below.</p>
+      <a class="btn primary" href="{{ url_for('add') }}">Add an item</a>
+    {% endif %}
+  </div>
 {% endif %}
 
 <ul class="results">
@@ -86,7 +155,7 @@
     <div>
       <h3><a href="{{ url_for('item', item_id=it.id) }}">{{ it.title }}</a></h3>
       <div class="sub">
-        <span class="pill t-{{ it.media_type }}">{{ it.media_type }}</span>
+        {% if not t %}<span class="pill t-{{ it.media_type }}">{{ it.media_type }}</span>{% endif %}
         {% if it.creator %} {{ it.creator }}{% endif %}{% if it.year %} · {{ it.year }}{% endif %}
         {% if it.format %} · {{ it.format }}{% endif %}
         {% if it.extra.platform %} · {{ it.extra.platform }}{% endif %}
@@ -95,7 +164,8 @@
       {% if it.genres %}
       <div class="chips">
         {% for g in it.genres %}
-          <a class="chip {{ 'active' if genre and g|lower == genre|lower }}" href="{{ url_for('index', genre=g, type=media_type or '') }}">{{ g }}</a>
+          <a class="chip {{ 'active' if genre and g|lower == genre|lower }}"
+             href="{{ browse_url({'type': t, 'genre': g, 'sort': keep.sort}) }}">{{ g }}</a>
         {% endfor %}
       </div>
       {% endif %}
@@ -107,10 +177,12 @@
 {% endfor %}
 </ul>
 
+{% if not t %}
 <form class="import" method="post" action="{{ url_for('import_csv') }}" enctype="multipart/form-data">
   <b>Import CSV</b>
   <input type="file" name="file" accept=".csv,text/csv">
   <button type="submit">Import</button>
   <span class="muted">Header row: media_type, title, and any other field (creator, year, genre, isbn, platform…). Separate multiple genres with commas.</span>
 </form>
+{% endif %}
 {% endblock %}

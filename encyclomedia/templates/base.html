@@ -55,19 +55,56 @@
   header nav a { white-space: nowrap; }
   @media (max-width: 640px) { header nav { gap: 12px; font-size: 13px; } .brand { font-size: 19px; } }
   @media (max-width: 480px) { header nav .wide { display: none; } }
+  /* Media tabs: All / Books / Music / Movies / Games */
+  .tabs { background: var(--panel); border-bottom: 1px solid var(--line); }
+  .tabs .wrap { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; position: relative; }
+  .tabs .wrap::after { content: ""; flex: 0 0 1px; }   /* keeps the last tab clear of the edge when scrolled */
+  @media (max-width: 480px) { .tab { padding: 10px 8px; gap: 5px; } }
+  .tabs .wrap::-webkit-scrollbar { display: none; }
+  .tab { display: flex; align-items: center; gap: 7px; padding: 10px 12px; font-size: 14px; white-space: nowrap;
+         color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab:hover { color: var(--ink); }
+  .tab.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+  .tab .n { font-size: 12px; font-weight: 400; color: var(--muted); background: var(--chip);
+            border-radius: 999px; padding: 0 7px; font-variant-numeric: tabular-nums; }
+  .tab .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .tab.active .n { background: var(--accent); color: var(--accent-ink); }
 </style>
 {% block head %}{% endblock %}
 </head>
 <body>
 <header><div class="wrap">
   <a class="brand" href="{{ url_for('index') }}">Encyclo<span>Media</span></a>
+  {% set tab = active_tab|default('') %}
   <nav>
-    <a href="{{ url_for('index') }}">Browse</a>
     <a href="{{ url_for('genres_page') }}">Genres</a>
-    <a href="{{ url_for('add') }}">Add item</a>
-    <a class="wide" href="{{ url_for('export_csv') }}">Export CSV</a>
+    <a href="{{ url_for('add', type=tab) if tab in TYPE_SLUG else url_for('add') }}">Add item</a>
+    <a class="wide" href="{{ url_for('export_csv', type=tab) if tab in TYPE_SLUG else url_for('export_csv') }}">Export CSV</a>
   </nav>
 </div></header>
+<nav class="tabs" aria-label="Media types"><div class="wrap">
+  <a class="tab {{ 'active' if tab == 'all' }}" href="{{ url_for('index') }}">All
+    <span class="n">{{ nav_counts.values()|sum }}</span></a>
+  {% for t in MEDIA_TYPES %}
+    <a class="tab {{ 'active' if tab == t }}" href="{{ url_for('media_page', kind=TYPE_SLUG[t]) }}">
+      <span class="dot t-{{ t }}"></span>{{ TYPE_TITLE[t] }} <span class="n">{{ nav_counts.get(t, 0) }}</span></a>
+  {% endfor %}
+</div></nav>
+<script>
+  // On narrow screens the tab row scrolls sideways: bring the current tab into view.
+  (() => {
+    const tab = document.querySelector('.tabs .tab.active');
+    if (!tab) return;
+    const row = tab.parentElement;
+    const show = () => {
+      const r = row.getBoundingClientRect(), b = tab.getBoundingClientRect();
+      if (b.left < r.left + 16 || b.right > r.right - 16)
+        row.scrollLeft += (b.left + b.width / 2) - (r.left + r.width / 2);
+    };
+    show();
+    addEventListener('load', show);
+  })();
+</script>
 <main><div class="wrap">
   {% for cat, msg in get_flashed_messages(with_categories=true) %}
     <div class="flash {{ cat }}">{{ msg }}</div>

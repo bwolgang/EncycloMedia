@@ -844,3 +844,91 @@ def test_cli_credit_options(tmp_path, capsys):
     capsys.readouterr()
     main(["--db", db, "--no-semantic", "show", "1"])
     assert "Dave Gibbons, John Higgins" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- per-type pages
+@pytest.fixture
+def web(cat):
+    app = create_app(cat.db_path)
+    app.testing = True
+    return app.test_client()
+
+
+@pytest.mark.parametrize("path, title, present, absent", [
+    ("/books", "Books", ["Dune", "Mythos"], ["Dune: Part Two", "Abbey Road", "Hades"]),
+    ("/music", "Music", ["Abbey Road"], ["Mythos", "Hades"]),
+    ("/movies", "Movies", ["Dune: Part Two"], ["Mythos", "Abbey Road"]),
+    ("/games", "Games", ["Hades"], ["Mythos", "Abbey Road"]),
+])
+def test_each_media_type_has_its_own_page(web, path, title, present, absent):
+    page = web.get(path).get_data(as_text=True)
+    assert f"<h1" in page and f">{title}</h1>" in page
+    for t in present:
+        assert f">{t}</a></h3>" in page, t
+    for t in absent:
+        assert f">{t}</a></h3>" not in page, t
+    assert 'name="type"' not in page                       # no media-type picker on a type page
+    assert "Import CSV" not in page
+
+
+def test_all_page_still_lists_everything_and_tabs_show_counts(web):
+    page = web.get("/").get_data(as_text=True)
+    for t in ("Dune", "Dune: Part Two", "Abbey Road", "Hades", "Mythos"):
+        assert f">{t}</a></h3>" in page
+    assert re.search(r'class="tab active" href="/">All\s*<span class="n">5</span>', page)
+    assert re.search(r'href="/books">\s*<span class="dot t-book"></span>Books <span class="n">2</span>', page)
+    assert "Import CSV" in page
+
+
+def test_search_and_genre_filter_stay_on_the_type_page(web, cat):
+    cat.add("movie", "Dune", creator="David Lynch", genre="Science fiction")
+    page = web.get("/books?q=dune").get_data(as_text=True)
+    assert ">Dune</a></h3>" in page and "David Lynch" not in page and "Dune: Part Two" not in page
+    assert 'action="/books"' in page
+    page = web.get("/movies?genre=Science+fiction").get_data(as_text=True)
+    assert "David Lynch" in page and 'href="/movies"' in page    # filter chip removes back to /movies
+    assert "Frank Herbert" not in page
+
+
+def test_old_type_links_redirect_to_type_pages(web):
+    resp = web.get("/?type=book&genre=Fantasy&q=x")
+    assert resp.status_code == 302 and resp.headers["Location"] == "/books?genre=Fantasy&q=x"
+    assert web.get("/comics").status_code == 404
+
+
+def test_sorting(web, cat):
+    cat.add("book", "Neuromancer", creator="William Gibson", year=1984)
+    titles = lambda html: re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', html)
+    assert titles(web.get("/books").get_data(as_text=True)) == ["Dune", "Mythos", "Neuromancer"]
+    assert titles(web.get("/books?sort=newest").get_data(as_text=True)) == ["Neuromancer", "Dune", "Mythos"]  # no year -> last
+    assert titles(web.get("/books?sort=creator").get_data(as_text=True)) == ["Dune", "Mythos", "Neuromancer"]
+    assert titles(web.get("/books?sort=added").get_data(as_text=True))[0] == "Neuromancer"
+    page = web.get("/books").get_data(as_text=True)
+    assert '<option value="creator" >Author</option>' in page or ">Author</option>" in page
+    assert web.get("/books?sort=nonsense").status_code == 200   # unknown sort falls back to title
+
+
+def test_detail_and_add_links_point_to_type_pages(web, cat):
+    dune2 = cat.search("part two")[0]
+    page = web.get(f"/item/{dune2['id']}").get_data(as_text=True)
+    assert '<a href="/movies">Movies</a> ›' in page                   # breadcrumb
+    assert 'class="tab active" href="/movies"' in page                 # its tab is highlighted
+    books = web.get("/books").get_data(as_text=True)
+    assert 'href="/add?type=book"' in books and "Add a book" in books
+    assert "Add an album" in web.get("/music").get_data(as_text=True)
+
+
+def test_empty_type_page(tmp_path):
+    app = create_app(tmp_path / "empty.db")
+    app.testing = True
+    page = app.test_client().get("/games").get_data(as_text=True)
+    assert "No games in your catalog yet." in page
+
+
+def test_export_one_media_type(web, cat):
+    text = web.get("/export.csv?type=music").get_data(as_text=True)
+    lines = text.strip().splitlines()
+    assert len(lines) == 2 and "Abbey Road" in lines[1]
+    assert "isbn" not in lines[0] and "tracklist" in lines[0]          # only music's columns
+    assert "encyclomedia-music.csv" in web.get("/export.csv?type=music").headers["Content-Disposition"]
+    assert len(web.get("/export.csv").get_data(as_text=True).strip().splitlines()) == 6

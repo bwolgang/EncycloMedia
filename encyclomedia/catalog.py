@@ -500,14 +500,18 @@ class Catalog:
                 f.close()
         return count
 
-    def export_csv(self) -> str:
-        """Whole catalog as CSV text; copy and type-specific fields become their own columns."""
-        extra_cols = sorted({f for fs in EXTRA_FIELDS.values() for f in fs} - set(COPY_FIELDS))
+    def export_csv(self, media_type=None) -> str:
+        """The catalog (or one media type) as CSV text; copy and type-specific fields
+        become their own columns."""
+        types = [media_type] if media_type else MEDIA_TYPES
+        extra_cols = [f for f in dict.fromkeys(f for t in types for f in EXTRA_FIELDS[t]) if f not in COPY_FIELDS]
+        if not media_type:
+            extra_cols = sorted(extra_cols)
         out = io.StringIO()
         w = csv.DictWriter(out, fieldnames=["media_type", *CORE_FIELDS, *COPY_FIELDS, *extra_cols],
                            extrasaction="ignore")
         w.writeheader()
-        for item in self.list():
+        for item in self.list(media_type):
             w.writerow({**{k: item.get(k) for k in ("media_type", *CORE_FIELDS)}, **item["extra"]})
         return out.getvalue()
 
@@ -516,10 +520,23 @@ class Catalog:
         row = self.conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self.to_dict(row) if row else None
 
-    def list(self, media_type=None, genre=None, location=None, origin=None) -> list[dict]:
+    # Orderings for list(). Blank years and creators sort last.
+    SORTS = {
+        "type": "media_type, title COLLATE NOCASE",
+        "title": "title COLLATE NOCASE",
+        "creator": "creator IS NULL, creator COLLATE NOCASE, year IS NULL, year, title COLLATE NOCASE",
+        "newest": "year IS NULL, year DESC, title COLLATE NOCASE",
+        "oldest": "year IS NULL, year, title COLLATE NOCASE",
+        "added": "added_at DESC, id DESC",
+    }
+
+    def list(self, media_type=None, genre=None, location=None, origin=None, sort=None) -> list[dict]:
+        """Items matching the filters. `sort` is one of SORTS; by default everything is
+        grouped by media type, and a single type is sorted by title."""
         clauses, args = self._filters(media_type, genre, location=location, origin=origin)
         sql = "SELECT * FROM items" + (f" WHERE {' AND '.join(clauses)}" if clauses else "")
-        rows = self.conn.execute(sql + " ORDER BY media_type, title COLLATE NOCASE", args)
+        order = self.SORTS.get(sort) or self.SORTS["title" if media_type else "type"]
+        rows = self.conn.execute(f"{sql} ORDER BY {order}", args)
         return [self.to_dict(r) for r in rows]
 
     def copy_values(self, field, media_type=None) -> list[dict]:

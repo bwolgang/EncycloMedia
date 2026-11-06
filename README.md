@@ -22,6 +22,26 @@ original single-file script, run with `--db ~/.media_catalog.db` and that databa
 | `web.py` + `templates/` | Flask web interface |
 | `__main__.py` | Command line interface |
 
+### Browsing
+The tabs along the top switch between **All** and a page for each media type:
+
+| Page | Address |
+|---|---|
+| All items | `/` |
+| Books | `/books` |
+| Music | `/music` |
+| Movies | `/movies` |
+| Games | `/games` |
+
+- Each tab shows how many items it holds.
+- A type page searches and filters within that type only. Its genre menu lists only that type's genres,
+  and its **Add** button starts a new item of that type.
+- **Sort by** title, creator (Author / Artist / Director / Game studio), year (newest or oldest), or recently
+  added. Search results are always sorted by best match.
+- **Export CSV** on a type page exports just that type (`/export.csv?type=music`).
+- An item's details page highlights its tab, and its breadcrumb and genre chips lead back to its type page.
+- Older links such as `/?type=book` redirect to the matching page.
+
 ### Credits
 Each media type has its own credit fields. The main credit is shown first:
 
@@ -143,7 +163,7 @@ python -m encyclomedia lookup music "Abbey Road" --add 1         # add match #1
 python -m encyclomedia search "space politics" --type book
 python -m encyclomedia search "herbert" --keyword-only
 python -m encyclomedia add music "Swimming" --creator "Mac Miller" --genre "Hip-Hop, Jazz rap"
-python -m encyclomedia list --type movie
+python -m encyclomedia list --type movie --sort newest   # sorts: type, title, creator, newest, oldest, added
 python -m encyclomedia list --genre "jazz rap"
 python -m encyclomedia add movie "Arrival" --edition "4K Steelbook" --location "Media cabinet" \
     --origin "Best Buy" --condition "Sealed"
@@ -163,6 +183,7 @@ python -m encyclomedia edit 3 --format vinyl --field label="Apple Records"
 python -m encyclomedia remove 3
 python -m encyclomedia import collection.csv
 python -m encyclomedia export collection.csv
+python -m encyclomedia export books.csv --type book
 python -m encyclomedia reindex
 python -m encyclomedia serve --port 8000
 ```

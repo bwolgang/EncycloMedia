@@ -36,7 +36,8 @@ which is how to fold spelling variants together.</p>
       <td><a class="chip" href="{{ url_for('index', genre=g.name) }}">{{ g.name }}</a></td>
       <td class="num"><b>{{ g.count }}</b></td>
       {% for t in MEDIA_TYPES %}{% set n = per_type[t].get(g.name, 0) %}
-        <td class="num types {{ 'zero' if not n }}">{{ n }}</td>{% endfor %}
+        <td class="num types {{ 'zero' if not n }}">{% if n %}<a href="{{ browse_url({'type': t, 'genre': g.name}) }}"
+            title="{{ TYPE_TITLE[t] }} in {{ g.name }}">{{ n }}</a>{% else %}{{ n }}{% endif %}</td>{% endfor %}
       <td>
         <div class="edit">
           <form method="post" action="{{ url_for('genres_rename') }}" style="display:flex;gap:6px">

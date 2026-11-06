@@ -118,6 +118,7 @@ def main(argv=None):
     ls.add_argument("--genre", help="only items with this genre")
     ls.add_argument("--location", help="only items stored here")
     ls.add_argument("--origin", help="only items acquired from here")
+    ls.add_argument("--sort", choices=tuple(Catalog.SORTS), help="order (default: by type, or by title with --type)")
 
     lv = sub.add_parser("locations", help="list storage locations (or --origins) with counts")
     lv.add_argument("--origins", action="store_true", help="list where items came from instead")
@@ -148,6 +149,7 @@ def main(argv=None):
 
     ex = sub.add_parser("export", help="export CSV")
     ex.add_argument("csv_path", nargs="?", help="output file (default: print)")
+    ex.add_argument("--type", choices=MEDIA_TYPES, help="export only this media type")
 
     ri = sub.add_parser("reindex", help="build semantic-search embeddings")
     ri.add_argument("--force", action="store_true", help="recompute every item")
@@ -217,7 +219,7 @@ def main(argv=None):
                     print("Did you mean: " + ", ".join(hint) + "?")
 
         elif args.cmd == "list":
-            items = cat.list(args.type, args.genre, location=args.location, origin=args.origin)
+            items = cat.list(args.type, args.genre, location=args.location, origin=args.origin, sort=args.sort)
             for it in items:
                 print(one_line(it))
             if not items:
@@ -277,7 +279,7 @@ def main(argv=None):
             print(f"Imported {cat.import_csv(args.csv_path)} items.")
 
         elif args.cmd == "export":
-            text = cat.export_csv()
+            text = cat.export_csv(args.type)
             if args.csv_path:
                 with open(args.csv_path, "w", newline="", encoding="utf-8") as f:
                     f.write(text)

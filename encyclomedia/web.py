@@ -67,9 +67,29 @@ def copy_rows(item: dict) -> list[tuple[str, str, str]]:
             if item["extra"].get(f) not in (None, "")]
 
 
+# Each media type has its own page: /books, /music, /movies, /games.
+TYPE_SLUG = {"book": "books", "music": "music", "movie": "movies", "game": "games"}
+SLUG_TYPE = {slug: t for t, slug in TYPE_SLUG.items()}
+TYPE_TITLE = {"book": "Books", "music": "Music", "movie": "Movies", "game": "Games"}
+ITEM_NOUN = {"book": "book", "music": "album", "movie": "movie", "game": "game"}
+
+
 def browse_url(params: dict, drop=None) -> str:
-    """Browse-page URL with the given filters, leaving out blank ones and `drop`."""
-    return url_for("index", **{k: v for k, v in params.items() if v and k != drop})
+    """URL of a browse page with the given filters, leaving out blank ones and `drop`.
+    A `type` filter goes to that type's own page (/books?genre=...), otherwise to All."""
+    params = {k: v for k, v in params.items() if v and k != drop}
+    media_type = params.pop("type", None)
+    if media_type in TYPE_SLUG:
+        return url_for("media_page", kind=TYPE_SLUG[media_type], **params)
+    return url_for("index", **params)
+
+
+def sort_options(media_type) -> list[tuple[str, str]]:
+    """(value, label) choices for the sort menu on a browse page."""
+    who = CREATOR_LABEL[media_type] if media_type else "Creator"
+    opts = [("title", "Title"), ("creator", who), ("newest", "Year (newest)"),
+            ("oldest", "Year (oldest)"), ("added", "Recently added")]
+    return opts if media_type else [("type", "Media type"), *opts]
 
 
 def split_list(value, sep) -> list[str]:
@@ -100,6 +120,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     app.config.update(DB_PATH=str(db_path), SECRET_KEY="encyclomedia-local",
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
     app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url,
+                                 TYPE_SLUG=TYPE_SLUG, TYPE_TITLE=TYPE_TITLE, ITEM_NOUN=ITEM_NOUN,
                                  MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
                                  CREDIT_FIELDS=CREDIT_FIELDS,
                                  CREATOR_LABEL=CREATOR_LABEL, YEAR_LABEL=YEAR_LABEL, label=label,
@@ -115,6 +136,14 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         if "catalog" not in g:
             g.catalog = Catalog(app.config["DB_PATH"], embedder=embedder)
         return g.catalog
+
+    @app.context_processor
+    def nav_counts():
+        """Item counts for the media tabs at the top of every page."""
+        try:
+            return {"nav_counts": catalog().counts()}
+        except Exception:  # never let the tab bar break a page
+            return {"nav_counts": {}}
 
     @app.teardown_appcontext
     def _close(_exc):
@@ -184,12 +213,24 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     # ---------------------------------------------------------------- pages
     @app.get("/")
     def index():
+        # Older links like /?type=book&genre=Fantasy now live on the type's own page.
+        if request.args.get("type") in TYPE_SLUG:
+            return redirect(browse_url(request.args.to_dict()))
+        return browse(None)
+
+    @app.get("/<any(books, music, movies, games):kind>")
+    def media_page(kind):
+        return browse(SLUG_TYPE[kind])
+
+    def browse(media_type):
+        """The All page (media_type None) or one type's page: list, search and filters."""
         q = request.args.get("q", "").strip()
-        media_type = request.args.get("type") or None
         genre = request.args.get("genre") or None
         location = request.args.get("location", "").strip() or None
         origin = request.args.get("origin", "").strip() or None
         semantic = request.args.get("mode", "hybrid") != "keyword"
+        sorts = sort_options(media_type)
+        sort = request.args.get("sort") if request.args.get("sort") in dict(sorts) else sorts[0][0]
         cat = catalog()
         suggestions = []
         if q:
@@ -198,12 +239,12 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
             if not items and not (genre or location or origin):
                 suggestions = cat.suggest(q)
         else:
-            items = cat.list(media_type, genre, location=location, origin=origin)
+            items = cat.list(media_type, genre, location=location, origin=origin, sort=sort)
         genre_options = cat.genres(media_type)
         if genre and genre_key(genre) not in {genre_key(g["name"]) for g in genre_options}:
             genre_options.append({"name": genre, "count": 0})  # keep the active filter selectable
         return render_template("index.html", items=items, q=q, media_type=media_type, genre=genre,
-                               location=location, origin=origin,
+                               location=location, origin=origin, sort=sort, sorts=sorts,
                                genre_options=genre_options, mode="hybrid" if semantic else "keyword",
                                counts=cat.counts(), suggestions=suggestions)
 
@@ -303,8 +344,10 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
 
     @app.get("/export.csv")
     def export_csv():
-        return Response(catalog().export_csv(), mimetype="text/csv",
-                        headers={"Content-Disposition": "attachment; filename=encyclomedia.csv"})
+        media_type = request.args.get("type") if request.args.get("type") in TYPE_SLUG else None
+        name = f"encyclomedia-{TYPE_SLUG[media_type]}.csv" if media_type else "encyclomedia.csv"
+        return Response(catalog().export_csv(media_type), mimetype="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename={name}"})
 
     # ---------------------------------------------------------------- JSON API
     @app.get("/api/lookup")
