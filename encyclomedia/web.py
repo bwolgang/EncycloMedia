@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_template, request,
                    send_file, url_for)
 
-from . import covers, metadata
+from . import autofill, covers, metadata
 from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, CREDIT_FIELDS, CREDIT_LABELS, split_names, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
 
 FIELD_LABELS = {"isbn": "ISBN", "upc": "UPC", "edition_year": "Edition year (your copy)", "cover_url": "Cover image URL", "tracklist": "Track list",
@@ -243,7 +243,9 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         genre_options = cat.genres(media_type)
         if genre and genre_key(genre) not in {genre_key(g["name"]) for g in genre_options}:
             genre_options.append({"name": genre, "count": 0})  # keep the active filter selectable
+        needing = len(autofill.books_needing_details(cat)) if media_type == "book" else 0
         return render_template("index.html", items=items, q=q, media_type=media_type, genre=genre,
+                               books_needing_details=needing,
                                location=location, origin=origin, sort=sort, sorts=sorts,
                                genre_options=genre_options, mode="hybrid" if semantic else "keyword",
                                counts=cat.counts(), suggestions=suggestions)
@@ -337,10 +339,23 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         if not upload or not upload.filename:
             flash("Choose a CSV file first.", "error")
         else:
+            cat = catalog()
             text = io.TextIOWrapper(upload.stream, encoding="utf-8-sig", newline="")
-            n = catalog().import_csv(text)
-            flash(f"Imported {n} items.", "ok")
+            ids = []
+            n = cat.import_csv(text, ids_out=ids)
+            flash(f"Imported {n} item{'s' if n != 1 else ''}.", "ok")
+            if request.form.get("autofill"):
+                report = autofill.autofill_books(cat, ids)
+                if report.summary():
+                    flash(report.summary(), "error" if report.error else "ok")
         return redirect(url_for("index"))
+
+    @app.post("/books/autofill")
+    def books_autofill():
+        report = autofill.autofill_books(catalog())
+        flash(report.summary() or "Every book with an ISBN already has its details.",
+              "error" if report.error else "ok")
+        return redirect(url_for("media_page", kind="books"))
 
     @app.get("/export.csv")
     def export_csv():

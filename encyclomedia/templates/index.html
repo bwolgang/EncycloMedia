@@ -39,6 +39,8 @@
   .import { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line);
             display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
   .import input { width: auto; }
+  .import .check { display: flex; align-items: center; gap: 6px; }
+  .import .muted { flex-basis: 100%; }
   @media (max-width: 640px) {
     .search { grid-template-columns: 1fr 1fr; } .search input[name=q] { grid-column: 1 / -1; }
     .card { grid-template-columns: 44px 1fr; } .cover { width: 44px; height: 60px; } .score { display: none; }
@@ -62,6 +64,12 @@
   </div>
   {% if t %}
   <div class="actions">
+    {% if books_needing_details %}
+    <form method="post" action="{{ url_for('books_autofill') }}">
+      <button type="submit" title="Look up books that have an ISBN on Open Library and fill in their blank details">
+        Fill in from ISBNs ({{ books_needing_details }})</button>
+    </form>
+    {% endif %}
     <a class="btn primary" href="{{ url_for('add', type=t) }}">Add {{ 'an album' if t == 'music' else 'a ' ~ ITEM_NOUN[t] }}</a>
   </div>
   {% endif %}
@@ -181,8 +189,12 @@
 <form class="import" method="post" action="{{ url_for('import_csv') }}" enctype="multipart/form-data">
   <b>Import CSV</b>
   <input type="file" name="file" accept=".csv,text/csv">
+  <label class="check"><input type="checkbox" name="autofill" value="1" checked>
+    Fill in books' details from their ISBNs</label>
   <button type="submit">Import</button>
-  <span class="muted">Header row: media_type, title, and any other field (creator, year, genre, isbn, platform…). Separate multiple genres with commas.</span>
+  <span class="muted">Header row: media_type, title, and any other field (creator, year, genre, isbn, platform…).
+    Separate multiple genres with commas. Books with an ISBN get their cover, edition, publisher and other
+    blank details from Open Library; your CSV's own values are kept.</span>
 </form>
 {% endif %}
 {% endblock %}

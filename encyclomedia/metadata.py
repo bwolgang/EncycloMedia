@@ -75,21 +75,26 @@ def looks_like_code(text: str) -> bool:
 OPENLIBRARY = "https://openlibrary.org"
 
 
-def parse_openlibrary_book(d: dict, isbn=None, first_published=None) -> dict:
+def parse_openlibrary_book(d: dict, isbn=None, first_published=None, details=None) -> dict:
     """An ISBN identifies one edition, so its publish_date is the edition's year.
-    `first_published` is the work's original year, looked up separately."""
+    `first_published` is the work's original year, looked up separately. `details`
+    is the edition record (jscmd=details), which names the edition and its format."""
+    details = details or {}
     subjects = [s["name"] if isinstance(s, dict) else s for s in d.get("subjects", [])]
     publishers = [p["name"] if isinstance(p, dict) else p for p in d.get("publishers", [])]
     edition_year = _year(d.get("publish_date"))
+    cover = d.get("cover") or {}
     return _candidate(
         "book", d.get("title"), "Open Library",
         creator=", ".join(a["name"] for a in d.get("authors", [])) or None,
         year=first_published or edition_year,
         genre=", ".join(subjects[:3]) or None,
-        extra={"isbn": isbn, "edition_year": edition_year,
+        format=(details.get("physical_format") or "").strip() or None,
+        extra={"isbn": isbn, "edition": (details.get("edition_name") or "").strip() or None,
+               "edition_year": edition_year,
                "publisher": publishers[0] if publishers else None,
                "pages": d.get("number_of_pages"),
-               "cover_url": (d.get("cover") or {}).get("medium")},
+               "cover_url": cover.get("large") or cover.get("medium")},
     )
 
 
@@ -112,23 +117,86 @@ def parse_openlibrary_search(data: dict) -> list[dict]:
     return out
 
 
+def isbn_check_ok(isbn: str) -> bool:
+    """True if the ISBN-10 or ISBN-13 check digit is right."""
+    if re.fullmatch(r"\d{9}[\dX]", isbn):
+        total = sum((10 - i) * (10 if c == "X" else int(c)) for i, c in enumerate(isbn))
+        return total % 11 == 0
+    if re.fullmatch(r"\d{13}", isbn):
+        total = sum(int(c) * (1 if i % 2 == 0 else 3) for i, c in enumerate(isbn))
+        return total % 10 == 0
+    return False
+
+
+def normalize_isbn(value) -> str | None:
+    """Clean up an ISBN as typed or exported: '978-0-441-01359-3' -> '9780441013593'.
+
+    Repairs one common spreadsheet accident, a dropped leading zero
+    ('441172717' -> '0441172717'). Returns None if it isn't a valid ISBN, e.g. a
+    typo, or Excel's scientific notation ('9.78044E+12') which has lost the digits.
+    """
+    text = re.sub(r"[\s-]", "", str(value or "")).upper()
+    if text.endswith(".0"):  # "9780441013593.0" from a numeric spreadsheet column
+        text = text[:-2]
+    if not re.fullmatch(r"\d{8,12}[\dX]|\d{13}", text):
+        return None
+    for candidate in (text, "0" + text, "00" + text):
+        if len(candidate) in (10, 13) and isbn_check_ok(candidate):
+            return candidate
+    return None
+
+
+def books_by_isbns(isbns, batch_size=20, pause=0.3) -> dict[str, dict]:
+    """Look up many ISBNs at once. Returns {normalized isbn: candidate} for those found.
+
+    Open Library answers several ISBNs per request, so a whole CSV takes a few
+    requests per 20 books rather than several per book. Raises MetadataError only
+    if the main request fails; the extras (edition name, original year) are optional.
+    """
+    wanted = list(dict.fromkeys(i for i in (normalize_isbn(x) for x in isbns) if i))
+    found = {}
+    for n, start in enumerate(range(0, len(wanted), batch_size)):
+        if n and pause:
+            time.sleep(pause)  # be gentle with a free service
+        chunk = wanted[start:start + batch_size]
+        keys = ",".join(f"ISBN:{i}" for i in chunk)
+        data = _http(f"{OPENLIBRARY}/api/books", {"bibkeys": keys, "format": "json", "jscmd": "data"})
+        try:
+            details = _http(f"{OPENLIBRARY}/api/books", {"bibkeys": keys, "format": "json", "jscmd": "details"})
+        except MetadataError:
+            details = {}
+        years = _first_published_many(chunk)
+        for isbn in chunk:
+            key = f"ISBN:{isbn}"
+            if key in data:
+                found[isbn] = parse_openlibrary_book(
+                    data[key], isbn, first_published=years.get(isbn),
+                    details=(details.get(key) or {}).get("details"))
+    return found
+
+
 def books_by_isbn(isbn: str) -> list[dict]:
-    isbn = re.sub(r"[^0-9Xx]", "", isbn)
-    key = f"ISBN:{isbn}"
-    data = _http(f"{OPENLIBRARY}/api/books", {"bibkeys": key, "format": "json", "jscmd": "data"})
-    if key not in data:
-        return []
-    return [parse_openlibrary_book(data[key], isbn, first_published=_first_published(isbn))]
+    found = books_by_isbns([isbn])
+    return list(found.values())
 
 
-def _first_published(isbn: str) -> int | None:
-    """Original publication year of the work this ISBN's edition belongs to."""
+def _first_published_many(isbns) -> dict[str, int]:
+    """Original publication year of the work each ISBN's edition belongs to."""
+    if not isbns:
+        return {}
     try:
         docs = _http(f"{OPENLIBRARY}/search.json",
-                     {"q": f"isbn:{isbn}", "fields": "first_publish_year", "limit": 1}).get("docs", [])
+                     {"q": " OR ".join(f"isbn:{i}" for i in isbns), "fields": "first_publish_year,isbn",
+                      "limit": len(isbns) * 2}).get("docs", [])
     except MetadataError:
-        return None  # not worth failing the whole lookup over
-    return docs[0].get("first_publish_year") if docs else None
+        return {}  # not worth failing the whole lookup over
+    years = {}
+    for doc in docs:
+        doc_isbns = {str(x).upper() for x in doc.get("isbn") or []}
+        for isbn in isbns:
+            if doc.get("first_publish_year") and (isbn in doc_isbns or len(isbns) == 1):
+                years.setdefault(isbn, doc["first_publish_year"])
+    return years
 
 
 def books_by_title(query: str, limit=5) -> list[dict]:

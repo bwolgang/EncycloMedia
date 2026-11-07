@@ -19,6 +19,7 @@ original single-file script, run with `--db ~/.media_catalog.db` and that databa
 | `catalog.py` | SQLite storage, type-specific fields, multi-genre tagging, BM25 keyword search, hybrid search, CSV import/export |
 | `semantic.py` | Optional sentence-embedding model for meaning-based search |
 | `metadata.py` | Auto-fill from Open Library, MusicBrainz, TMDB, IGDB |
+| `autofill.py` | Fills in books' blank details from their ISBNs (used on CSV import) |
 | `web.py` + `templates/` | Flask web interface |
 | `__main__.py` | Command line interface |
 
@@ -143,6 +144,22 @@ An item can have any number of genres. Swimming can be both **Hip-Hop** and **Ja
 
 Movies and games can't be looked up by barcode because there's no free UPC database for them.
 
+#### Filling in books from their ISBNs
+When you import a CSV, every book with an `isbn` is looked up on Open Library, and its **blank** fields are
+filled in: cover, author, first-published year, format, edition, edition year, publisher and page count.
+Values from your CSV are always kept. Genres aren't filled in, because Open Library's subject lists are
+long and mixed.
+
+- On the web, the import form has a **Fill in books' details from their ISBNs** box, ticked by default.
+  On the command line, add `--no-autofill` to skip the lookups.
+- Afterwards, a message says how many books were filled in and lists any ISBN Open Library doesn't know.
+- ISBNs can have hyphens or spaces. A leading zero that a spreadsheet dropped is restored. ISBNs that Excel
+  turned into numbers like `9.78044E+12` have lost their digits, so they're listed as invalid. Format the
+  ISBN column as **Text** before typing them in.
+- Books are looked up 20 at a time, so a few hundred books take under a minute.
+- If you're offline, or for books already in your catalog, use **Fill in from ISBNs** on the Books page
+  (`python -m encyclomedia autofill`). It appears when books with an ISBN are missing details.
+
 ### Search
 - **Keyword:** SQLite FTS5 with BM25 ranking, prefix matching and stemming. Title matches weigh most.
 - **Semantic** (needs `sentence-transformers`): each item is embedded with `all-MiniLM-L6-v2`. The model
@@ -181,7 +198,8 @@ python -m encyclomedia genre-remove "Misc"
 python -m encyclomedia show 3
 python -m encyclomedia edit 3 --format vinyl --field label="Apple Records"
 python -m encyclomedia remove 3
-python -m encyclomedia import collection.csv
+python -m encyclomedia import collection.csv                 # add --no-autofill to skip ISBN lookups
+python -m encyclomedia autofill                              # fill in books that have an ISBN
 python -m encyclomedia export collection.csv
 python -m encyclomedia export books.csv --type book
 python -m encyclomedia reindex

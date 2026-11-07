@@ -477,8 +477,9 @@ class Catalog:
         self._embed_items(affected)
         return len(affected)
 
-    def import_csv(self, source) -> int:
-        """Import from a CSV path or file object.
+    def import_csv(self, source, ids_out: list | None = None) -> int:
+        """Import from a CSV path or file object. Returns how many items were added;
+        pass a list as `ids_out` to also get their ids (e.g. to auto-fill them).
 
         Header must include media_type and title. Other columns may be any core
         field or any type-specific field for that row's type (e.g. isbn, platform).
@@ -493,7 +494,9 @@ class Catalog:
                     continue
                 core = {k: v for k, v in row.items() if k in CORE_FIELDS}
                 extra = {k: v for k, v in row.items() if k in EXTRA_FIELDS[media_type] or k in COPY_FIELDS}
-                self.add(media_type, title, extra=extra, **core)
+                item_id = self.add(media_type, title, extra=extra, **core)
+                if ids_out is not None:
+                    ids_out.append(item_id)
                 count += 1
         finally:
             if f is not source:

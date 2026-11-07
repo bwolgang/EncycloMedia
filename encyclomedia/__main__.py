@@ -10,6 +10,7 @@ Command line interface.   python -m encyclomedia <command> ...
   remove   delete an item
   import   bulk import from CSV
   export   write the catalog to CSV
+  autofill fill in blank details for books that have an ISBN
   genres         list genres with item counts
   locations      list storage locations (or --origins) with item counts
   genre-rename   rename a genre everywhere (or merge it into another)
@@ -22,7 +23,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import metadata, semantic
+from . import autofill, metadata, semantic
 from .catalog import COPY_FIELDS, CORE_FIELDS, CREDIT_FIELDS, CREDIT_LABELS, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog
 
 
@@ -144,8 +145,11 @@ def main(argv=None):
     r = sub.add_parser("remove", help="remove an item")
     r.add_argument("id", type=int)
 
-    im = sub.add_parser("import", help="import CSV")
+    im = sub.add_parser("import", help="import CSV (books with an ISBN are filled in from Open Library)")
     im.add_argument("csv_path")
+    im.add_argument("--no-autofill", action="store_true", help="don't look up books' ISBNs")
+
+    sub.add_parser("autofill", help="fill in blank details for books that have an ISBN")
 
     ex = sub.add_parser("export", help="export CSV")
     ex.add_argument("csv_path", nargs="?", help="output file (default: print)")
@@ -276,7 +280,18 @@ def main(argv=None):
             print("Removed." if cat.remove(args.id) else "No item with that id.")
 
         elif args.cmd == "import":
-            print(f"Imported {cat.import_csv(args.csv_path)} items.")
+            ids = []
+            print(f"Imported {cat.import_csv(args.csv_path, ids_out=ids)} items.")
+            if not args.no_autofill:
+                summary = autofill.autofill_books(cat, ids).summary(
+                    retry_hint="Run `python -m encyclomedia autofill` to try again.")
+                if summary:
+                    print(summary)
+
+        elif args.cmd == "autofill":
+            report = autofill.autofill_books(cat)
+            print(report.summary(retry_hint="Check your internet connection and try again.")
+                  or "Every book with an ISBN already has its details.")
 
         elif args.cmd == "export":
             text = cat.export_csv(args.type)

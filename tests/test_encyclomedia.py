@@ -183,7 +183,8 @@ def test_isbn_lookup_fetches_original_year(monkeypatch):
     monkeypatch.setattr(metadata, "_http", fake_http)
     c = metadata.lookup("book", "978-0-547-92822-7")[0]
     assert (c["year"], c["extra"]["edition_year"]) == (1937, 2012)
-    assert calls[1][1]["q"] == "isbn:9780547928227"
+    search = [p for u, p in calls if u.endswith("/search.json")]
+    assert search[0]["q"] == "isbn:9780547928227"
 
     def search_down(url, params=None, **kw):
         if url.endswith("/api/books"):
@@ -932,3 +933,157 @@ def test_export_one_media_type(web, cat):
     assert "isbn" not in lines[0] and "tracklist" in lines[0]          # only music's columns
     assert "encyclomedia-music.csv" in web.get("/export.csv?type=music").headers["Content-Disposition"]
     assert len(web.get("/export.csv").get_data(as_text=True).strip().splitlines()) == 6
+
+
+# --------------------------------------------------------------------------- ISBN auto-fill
+from encyclomedia import autofill  # noqa: E402
+
+
+def test_normalize_isbn():
+    n = metadata.normalize_isbn
+    assert n("978-0-441-01359-3") == "9780441013593"
+    assert n(" 0 441 17271 7 ") == "0441172717"
+    assert n("080442957x") == "080442957X"                 # X check digit
+    assert n("441172717") == "0441172717"                  # spreadsheet dropped the leading zero
+    assert n("9780441013593.0") == "9780441013593"         # numeric spreadsheet column
+    assert n("9.78044E+12") is None                         # Excel scientific notation: digits lost
+    assert n("9780441013594") is None                       # wrong check digit (typo)
+    assert n("") is None and n(None) is None
+
+
+def fake_openlibrary(books: dict, years: dict = None, details: dict = None, calls: list = None):
+    """A stand-in for metadata._http answering the three Open Library requests."""
+    def fake(url, params=None, **kw):
+        if calls is not None:
+            calls.append((url, dict(params or {})))
+        keys = (params or {}).get("bibkeys", "").split(",")
+        if url.endswith("/api/books") and params["jscmd"] == "data":
+            return {k: books[k[5:]] for k in keys if k[5:] in books}
+        if url.endswith("/api/books"):
+            return {k: {"details": details[k[5:]]} for k in keys if k[5:] in (details or {})}
+        return {"docs": [{"isbn": [i], "first_publish_year": y} for i, y in (years or {}).items()]}
+    return fake
+
+
+DUNE_ED = {"title": "Dune", "authors": [{"name": "Frank Herbert"}], "publish_date": "2005",
+           "publishers": [{"name": "Ace"}], "number_of_pages": 604,
+           "cover": {"medium": "https://covers/m.jpg", "large": "https://covers/l.jpg"}}
+HOBBIT_ED = {"title": "The Hobbit", "authors": [{"name": "J.R.R. Tolkien"}], "publish_date": "2012",
+             "publishers": [{"name": "Houghton Mifflin"}], "number_of_pages": 300,
+             "cover": {"medium": "https://covers/h.jpg"}}
+
+
+def test_batch_lookup_uses_few_requests_and_reads_edition_details(monkeypatch):
+    calls = []
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary(
+        {"9780441013593": DUNE_ED, "9780547928227": HOBBIT_ED},
+        years={"9780441013593": 1965, "9780547928227": 1937},
+        details={"9780441013593": {"edition_name": "40th anniversary edition", "physical_format": "Paperback"}},
+        calls=calls))
+    found = metadata.books_by_isbns(["978-0-441-01359-3", "9780547928227", "9780000000002", "junk"], pause=0)
+    assert set(found) == {"9780441013593", "9780547928227"}
+    dune = found["9780441013593"]
+    assert (dune["year"], dune["format"]) == (1965, "Paperback")
+    assert dune["extra"]["edition"] == "40th anniversary edition" and dune["extra"]["edition_year"] == 2005
+    assert dune["extra"]["cover_url"] == "https://covers/l.jpg"           # large cover preferred
+    assert found["9780547928227"]["year"] == 1937
+    assert len(calls) == 3                                                  # one batch: data, details, search
+    assert metadata.books_by_isbns(["x"] * 3) == {}                         # nothing valid: no requests
+
+
+def test_autofill_fills_only_blank_fields(cat, monkeypatch):
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary(
+        {"9780441013593": DUNE_ED}, years={"9780441013593": 1965},
+        details={"9780441013593": {"edition_name": "40th anniversary edition", "physical_format": "Paperback"}}))
+    dune = cat.search("9780441013593")[0]          # fixture: creator, year, publisher "Ace", pages 604 set
+    cat.update(dune["id"], format="hardcover")
+    report = autofill.autofill_books(cat, [dune["id"]], lookup=lambda i: metadata.books_by_isbns(i, pause=0))
+    after = cat.get(dune["id"])
+    assert report.filled == ["Dune"]
+    assert after["extra"]["cover_url"] == "https://covers/l.jpg"
+    assert after["extra"]["edition"] == "40th anniversary edition" and after["extra"]["edition_year"] == 2005
+    assert after["format"] == "hardcover"            # existing value kept
+    assert after["year"] == 1965 and after["creator"] == "Frank Herbert"
+
+
+def test_csv_import_autofills_books_with_isbns(tmp_path, monkeypatch):
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary(
+        {"9780441013593": DUNE_ED, "9780547928227": HOBBIT_ED},
+        years={"9780441013593": 1965, "9780547928227": 1937}))
+    csv_text = ("media_type,title,creator,isbn,location\n"
+                "book,Dune,,978-0-441-01359-3,Shelf A2\n"
+                "book,My Hobbit,Tolkien (my spelling),9780547928227,\n"
+                "book,Mystery Book,,9780000000002,\n"
+                "book,Excel Victim,,9.78044E+12,\n"
+                "book,No ISBN,Someone,,\n"
+                "movie,Arrival,Denis Villeneuve,,\n")
+    app = create_app(tmp_path / "imp.db")
+    app.testing = True
+    client = app.test_client()
+    client.post("/import", content_type="multipart/form-data",
+                data={"file": (io.BytesIO(csv_text.encode()), "c.csv"), "autofill": "1"})
+    page = client.get("/").get_data(as_text=True)
+    assert "Imported 6 items." in page
+    assert "Filled in details for 2 books from their ISBNs." in page
+    assert "Not found on Open Library: Mystery Book (9780000000002)." in page
+    assert "Excel Victim (9.78044E+12)" in page
+
+    cat = Catalog(tmp_path / "imp.db")
+    dune = cat.search("shelf a2")[0]
+    assert dune["creator"] == "Frank Herbert" and dune["year"] == 1965
+    assert dune["extra"]["cover_url"] == "https://covers/l.jpg" and dune["extra"]["location"] == "Shelf A2"
+    hobbit = cat.search("my hobbit")[0]
+    assert hobbit["title"] == "My Hobbit" and hobbit["creator"] == "Tolkien (my spelling)"   # CSV wins
+    assert hobbit["extra"]["cover_url"] == "https://covers/h.jpg"
+
+
+def test_import_without_autofill_or_offline(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary({}, calls=calls))
+    app = create_app(tmp_path / "imp.db")
+    app.testing = True
+    client = app.test_client()
+    csv_bytes = b"media_type,title,isbn\nbook,Dune,9780441013593\n"
+    client.post("/import", content_type="multipart/form-data",
+                data={"file": (io.BytesIO(csv_bytes), "c.csv")})          # box unticked
+    assert calls == []
+
+    def offline(*a, **kw):
+        raise metadata.MetadataError("Could not reach openlibrary.org")
+    monkeypatch.setattr(metadata, "_http", offline)
+    client.post("/import", content_type="multipart/form-data",
+                data={"file": (io.BytesIO(csv_bytes), "c.csv"), "autofill": "1"})
+    page = client.get("/").get_data(as_text=True)
+    assert "Imported 1 item." in page and "Could not reach openlibrary.org" in page
+    assert len(Catalog(tmp_path / "imp.db").list("book")) == 2              # items still imported
+
+
+def test_books_page_fill_in_button(cat, monkeypatch):
+    app = create_app(cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    assert "Fill in from ISBNs (1)" in client.get("/books").get_data(as_text=True)  # Dune has an ISBN
+    assert "Fill in from ISBNs" not in client.get("/movies").get_data(as_text=True)
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary(
+        {"9780441013593": DUNE_ED},
+        details={"9780441013593": {"edition_name": "Ace mass-market", "physical_format": "Paperback"}}))
+    resp = client.post("/books/autofill")
+    assert resp.headers["Location"] == "/books"
+    page = client.get("/books").get_data(as_text=True)
+    assert "Filled in details for 1 book from their ISBNs." in page
+    assert "Fill in from ISBNs" not in page                 # nothing left to fill
+    assert cat.search("9780441013593")[0]["extra"]["edition"] == "Ace mass-market"
+
+
+def test_cli_import_autofill(tmp_path, monkeypatch, capsys):
+    from encyclomedia.__main__ import main
+    monkeypatch.setattr(metadata, "_http", fake_openlibrary({"9780441013593": DUNE_ED}))
+    csv_path = tmp_path / "books.csv"
+    csv_path.write_text("media_type,title,isbn\nbook,Dune,9780441013593\n", encoding="utf-8")
+    db = str(tmp_path / "cli.db")
+    main(["--db", db, "--no-semantic", "import", str(csv_path)])
+    assert "Filled in details for 1 book" in capsys.readouterr().out
+    main(["--db", db, "--no-semantic", "import", "--no-autofill", str(csv_path)])
+    assert "Filled in" not in capsys.readouterr().out
+    main(["--db", db, "--no-semantic", "autofill"])
+    assert "Filled in details for 1 book" in capsys.readouterr().out
