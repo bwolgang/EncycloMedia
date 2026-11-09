@@ -380,7 +380,7 @@ def test_web_genre_filter_chips_and_rename(music):
     app.testing = True
     client = app.test_client()
     page = client.get("/?genre=Jazz+rap").get_data(as_text=True)
-    assert "Swimming" in page and "Kind of Blue" not in page and "Jazz rap (2)" in page
+    assert "Swimming" in page and "Kind of Blue" not in page and "Jazz rap ✕" in page
     resp = client.post("/add", data={"media_type": "music", "title": "Faces", "genre": "Hip-Hop, Jazz rap"})
     assert client.get(resp.headers["Location"]).status_code == 200
     assert {g["name"]: g["count"] for g in client.get("/api/genres").get_json()["genres"]}["Jazz rap"] == 3
@@ -1087,3 +1087,82 @@ def test_cli_import_autofill(tmp_path, monkeypatch, capsys):
     assert "Filled in" not in capsys.readouterr().out
     main(["--db", db, "--no-semantic", "autofill"])
     assert "Filled in details for 1 book" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- several genres at once
+@pytest.fixture
+def rock(tmp_path):
+    c = Catalog(tmp_path / "rock.db")
+    c.add("music", "Abbey Road", genre="Rock")
+    c.add("music", "The Piper at the Gates of Dawn", genre="Psychedelic rock, Rock")
+    c.add("music", "Revolver", genre="Psychedelic rock")
+    c.add("music", "Kind of Blue", genre="Jazz")
+    c.add("movie", "Yellow Submarine", genre="Animation, Psychedelic rock")
+    return c
+
+
+def titles_of(items):
+    return {i["title"] for i in items}
+
+
+def test_catalog_any_and_all_genres(rock):
+    both = ["Rock", "Psychedelic rock"]
+    assert titles_of(rock.list(genre=both)) == {"Abbey Road", "The Piper at the Gates of Dawn", "Revolver",
+                                               "Yellow Submarine"}
+    assert titles_of(rock.list(genre=both, genre_match="all")) == {"The Piper at the Gates of Dawn"}
+    assert titles_of(rock.list("music", both)) == {"Abbey Road", "The Piper at the Gates of Dawn", "Revolver"}
+    assert titles_of(rock.list(genre="rock, psychedelic-rock")) == titles_of(rock.list(genre=both))  # spellings
+    assert titles_of(rock.search("the", genre=both)) == {"The Piper at the Gates of Dawn"}
+    assert titles_of(rock.list(genre=["Rock"], genre_match="all")) == {"Abbey Road", "The Piper at the Gates of Dawn"}
+
+
+def test_web_select_several_genres(rock):
+    app = create_app(rock.db_path)
+    app.testing = True
+    client = app.test_client()
+    shown = lambda html: set(re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', html))
+
+    page = client.get("/music?genre=Rock&genre=Psychedelic+rock").get_data(as_text=True)
+    assert shown(page) == {"Abbey Road", "The Piper at the Gates of Dawn", "Revolver"}
+    assert "Rock ✕" in page and "Psychedelic rock ✕" in page and ">or<" in page
+    # Each selected chip's ✕ removes just that genre.
+    assert 'href="/music?genre=Psychedelic+rock" title="Remove Rock"' in page
+    # Switching to "All" keeps both genres.
+    assert 'href="/music?genre=Rock&amp;genre=Psychedelic+rock&amp;match=all"' in page
+    page = client.get("/music?genre=Rock&genre=Psychedelic+rock&match=all").get_data(as_text=True)
+    assert shown(page) == {"The Piper at the Gates of Dawn"} and ">and<" in page
+
+    # A genre chip on a card adds that genre to the selection; clicking a selected one removes it.
+    page = client.get("/music?genre=Rock").get_data(as_text=True)
+    assert 'href="/music?genre=Rock&amp;genre=Psychedelic+rock"' in page
+    assert re.search(r'href="/music"\s+title="Remove Rock from the selected genres"', page)
+    # The dropdown adds another genre and no longer offers ones already selected.
+    assert '<option value="Psychedelic rock">' in page and '<option value="Rock">' not in page
+    assert '<input type="hidden" name="genre" value="Rock">' in page
+    assert "+ Add a genre" in page
+
+
+def test_genre_selection_survives_search_sort_and_redirect(rock):
+    app = create_app(rock.db_path)
+    app.testing = True
+    client = app.test_client()
+    page = client.get("/music?genre=Rock&genre=Jazz&sort=newest").get_data(as_text=True)
+    assert page.count('<input type="hidden" name="genre" value="Rock">') == 2   # search form + sort form
+    assert page.count('<input type="hidden" name="genre" value="Jazz">') == 2
+    resp = client.get("/?type=music&genre=Rock&genre=Jazz")
+    assert resp.headers["Location"] == "/music?genre=Rock&genre=Jazz"
+    page = client.get("/?genre=Rock&genre=Animation").get_data(as_text=True)    # across all types
+    assert {"Abbey Road", "Yellow Submarine"} <= set(re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', page))
+    assert client.get("/api/search?q=the&genre=Rock&genre=Psychedelic+rock&match=all").get_json()["results"][0][
+        "title"] == "The Piper at the Gates of Dawn"
+
+
+def test_cli_several_genres(rock, capsys):
+    from encyclomedia.__main__ import main
+    main(["--db", rock.db_path, "--no-semantic", "list", "--genre", "Rock", "--genre", "Psychedelic rock"])
+    out = capsys.readouterr().out
+    assert "Abbey Road" in out and "Revolver" in out and "Kind of Blue" not in out
+    main(["--db", rock.db_path, "--no-semantic", "list", "--genre", "Rock", "--genre", "Psychedelic rock",
+          "--all-genres"])
+    out = capsys.readouterr().out
+    assert "Piper" in out and "Abbey Road" not in out

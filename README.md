@@ -131,6 +131,13 @@ An item can have any number of genres. Swimming can be both **Hip-Hop** and **Ja
   you used. To change that spelling everywhere, rename the genre.
 - **Merging:** renaming "Rap" to an existing "Hip-Hop" moves every Rap item into Hip-Hop.
 - **CSV / CLI:** separate genres with commas, e.g. `--genre "Hip-Hop, Jazz rap"`.
+- **Several genres at once:** on a browse page, click genre tags on the items (or use the **+ Add a genre**
+  menu) to select more than one genre. Click a selected tag again, or its ✕, to remove it.
+  - **Any** (the default) shows items that have *at least one* of the selected genres: Rock + Psychedelic rock
+    lists every rock album and every psychedelic rock album.
+  - **All** shows only items that have *every* selected genre.
+  - The address keeps your selection (`/music?genre=Rock&genre=Psychedelic+rock`), so you can bookmark it.
+  - Command line: repeat `--genre`, and add `--all-genres` for the "All" behaviour.
 - The genre filter is exact. `--genre "jazz rap"` returns only Jazz rap items, while a keyword search for
   "jazz rap" also matches plain jazz albums and anything mentioning rap.
 
@@ -192,6 +199,8 @@ python -m encyclomedia add music "Faces" --creator "Mac Miller" --performers "Ri
 python -m encyclomedia add game "Stardew Valley" --creator "ConcernedApe" --designer "Eric Barone"
 python -m encyclomedia locations                                # or: locations --origins
 python -m encyclomedia search "mac" --genre hip-hop
+python -m encyclomedia list --genre Rock --genre "Psychedelic rock"           # either genre
+python -m encyclomedia list --genre Rock --genre "Psychedelic rock" --all-genres  # both genres
 python -m encyclomedia genres --type music
 python -m encyclomedia genre-rename "Rap" "Hip-Hop"           # merge
 python -m encyclomedia genre-remove "Misc"

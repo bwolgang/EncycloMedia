@@ -256,17 +256,25 @@ class Catalog:
         self.conn.execute("DELETE FROM genres WHERE id NOT IN (SELECT genre_id FROM item_genres)")
 
     @staticmethod
-    def _filters(media_type=None, genre=None, alias="items", location=None, origin=None):
+    def _filters(media_type=None, genre=None, alias="items", location=None, origin=None, genre_match="any"):
         """WHERE clauses + args for the media-type, genre, location and origin filters.
+        `genre` may be one genre, a list, or "Rock, Psychedelic rock". With several genres,
+        genre_match="any" keeps items with at least one of them; "all" only items with every one.
         Location and origin match the whole value, ignoring case and surrounding spaces."""
         clauses, args = [], []
         if media_type:
             clauses.append(f"{alias}.media_type = ?")
             args.append(media_type)
-        if genre:
-            clauses.append(f"EXISTS (SELECT 1 FROM item_genres ig JOIN genres g ON g.id = ig.genre_id "
-                           f"WHERE ig.item_id = {alias}.id AND g.key = ?)")
-            args.append(genre_key(genre))
+        keys = list(dict.fromkeys(genre_key(g) for g in split_genres(genre)))
+        if keys:
+            marks = ", ".join("?" * len(keys))
+            if genre_match == "all" and len(keys) > 1:
+                clauses.append(f"(SELECT COUNT(DISTINCT g.key) FROM item_genres ig JOIN genres g ON g.id = ig.genre_id "
+                               f"WHERE ig.item_id = {alias}.id AND g.key IN ({marks})) = {len(keys)}")
+            else:
+                clauses.append(f"EXISTS (SELECT 1 FROM item_genres ig JOIN genres g ON g.id = ig.genre_id "
+                               f"WHERE ig.item_id = {alias}.id AND g.key IN ({marks}))")
+            args.extend(keys)
         for field, value in (("location", location), ("origin", origin)):
             if value and value.strip():
                 clauses.append(f"lower(trim(json_extract({alias}.extra, '$.{field}'))) = lower(?)")
@@ -533,10 +541,12 @@ class Catalog:
         "added": "added_at DESC, id DESC",
     }
 
-    def list(self, media_type=None, genre=None, location=None, origin=None, sort=None) -> list[dict]:
+    def list(self, media_type=None, genre=None, location=None, origin=None, sort=None,
+             genre_match="any") -> list[dict]:
         """Items matching the filters. `sort` is one of SORTS; by default everything is
         grouped by media type, and a single type is sorted by title."""
-        clauses, args = self._filters(media_type, genre, location=location, origin=origin)
+        clauses, args = self._filters(media_type, genre, location=location, origin=origin,
+                                      genre_match=genre_match)
         sql = "SELECT * FROM items" + (f" WHERE {' AND '.join(clauses)}" if clauses else "")
         order = self.SORTS.get(sort) or self.SORTS["title" if media_type else "type"]
         rows = self.conn.execute(f"{sql} ORDER BY {order}", args)
@@ -603,7 +613,8 @@ class Catalog:
         return {i: float(s) for i, s in zip(ids, sims) if s >= min_similarity}
 
     def search(self, query, media_type=None, limit=10, semantic=True,
-               alpha=0.5, min_similarity=0.3, genre=None, location=None, origin=None) -> list[dict]:
+               alpha=0.5, min_similarity=0.3, genre=None, location=None, origin=None,
+               genre_match="any") -> list[dict]:
         """Best matches first. Each result gets `score` (0-1) and `match`.
 
         With an embedder and semantic=True this is hybrid search:
@@ -611,7 +622,8 @@ class Catalog:
         where keyword_score is BM25 scaled so the best keyword hit is 1.0.
         Items can surface through either signal; matching both ranks highest.
         """
-        filters = {"media_type": media_type, "genre": genre, "location": location, "origin": origin}
+        filters = {"media_type": media_type, "genre": genre, "location": location, "origin": origin,
+                   "genre_match": genre_match}
         kw = self._keyword_scores(query, filters, max(limit * 5, 50))
         top_kw = max(kw.values(), default=0) or 1.0
         kw = {i: s / top_kw for i, s in kw.items()}

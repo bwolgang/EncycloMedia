@@ -74,14 +74,38 @@ TYPE_TITLE = {"book": "Books", "music": "Music", "movie": "Movies", "game": "Gam
 ITEM_NOUN = {"book": "book", "music": "album", "movie": "movie", "game": "game"}
 
 
-def browse_url(params: dict, drop=None) -> str:
+def browse_url(params: dict, drop=None, **overrides) -> str:
     """URL of a browse page with the given filters, leaving out blank ones and `drop`.
-    A `type` filter goes to that type's own page (/books?genre=...), otherwise to All."""
-    params = {k: v for k, v in params.items() if v and k != drop}
+    A `type` filter goes to that type's own page (/books?genre=...), otherwise to All.
+    A list value (several genres) becomes a repeated parameter: ?genre=Rock&genre=Jazz."""
+    clean = {}
+    for k, v in {**params, **overrides}.items():
+        if k == drop:
+            continue
+        if isinstance(v, (list, tuple)):
+            v = [x for x in v if x]
+        if v:
+            clean[k] = v
+    params = clean
     media_type = params.pop("type", None)
+    if isinstance(media_type, list):
+        media_type = media_type[0]
+    if params.get("match") and len(params.get("genre") or []) < 2:
+        params.pop("match")  # "match all" only means something with two or more genres
     if media_type in TYPE_SLUG:
         return url_for("media_page", kind=TYPE_SLUG[media_type], **params)
     return url_for("index", **params)
+
+
+def genre_toggle_url(params: dict, genre: str) -> str:
+    """The same browse page with `genre` added to the selected genres, or removed if
+    it's already selected. Used by the genre chips."""
+    selected = list(params.get("genre") or [])
+    if genre_key(genre) in {genre_key(g) for g in selected}:
+        selected = [g for g in selected if genre_key(g) != genre_key(genre)]
+    else:
+        selected.append(genre)
+    return browse_url({**params, "genre": selected})
 
 
 def sort_options(media_type) -> list[tuple[str, str]]:
@@ -119,7 +143,8 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     app = Flask(__name__)
     app.config.update(DB_PATH=str(db_path), SECRET_KEY="encyclomedia-local",
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
-    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url,
+    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url, genre_toggle_url=genre_toggle_url,
+                                 genre_key=genre_key,
                                  TYPE_SLUG=TYPE_SLUG, TYPE_TITLE=TYPE_TITLE, ITEM_NOUN=ITEM_NOUN,
                                  MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
                                  CREDIT_FIELDS=CREDIT_FIELDS,
@@ -215,7 +240,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     def index():
         # Older links like /?type=book&genre=Fantasy now live on the type's own page.
         if request.args.get("type") in TYPE_SLUG:
-            return redirect(browse_url(request.args.to_dict()))
+            return redirect(browse_url(request.args.to_dict(flat=False)))
         return browse(None)
 
     @app.get("/<any(books, music, movies, games):kind>")
@@ -225,7 +250,10 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     def browse(media_type):
         """The All page (media_type None) or one type's page: list, search and filters."""
         q = request.args.get("q", "").strip()
-        genre = request.args.get("genre") or None
+        # Several genres can be selected (?genre=Rock&genre=Psychedelic+rock). By default an
+        # item needs any one of them; ?match=all asks for items that have every one.
+        genres = list({genre_key(g): g.strip() for g in request.args.getlist("genre") if genre_key(g)}.values())
+        genre_match = "all" if request.args.get("match") == "all" and len(genres) > 1 else "any"
         location = request.args.get("location", "").strip() or None
         origin = request.args.get("origin", "").strip() or None
         semantic = request.args.get("mode", "hybrid") != "keyword"
@@ -234,17 +262,18 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         cat = catalog()
         suggestions = []
         if q:
-            items = cat.search(q, media_type, limit=50, semantic=semantic, genre=genre,
-                               location=location, origin=origin)
-            if not items and not (genre or location or origin):
+            items = cat.search(q, media_type, limit=50, semantic=semantic, genre=genres,
+                               location=location, origin=origin, genre_match=genre_match)
+            if not items and not (genres or location or origin):
                 suggestions = cat.suggest(q)
         else:
-            items = cat.list(media_type, genre, location=location, origin=origin, sort=sort)
+            items = cat.list(media_type, genres, location=location, origin=origin, sort=sort,
+                             genre_match=genre_match)
         genre_options = cat.genres(media_type)
-        if genre and genre_key(genre) not in {genre_key(g["name"]) for g in genre_options}:
-            genre_options.append({"name": genre, "count": 0})  # keep the active filter selectable
         needing = len(autofill.books_needing_details(cat)) if media_type == "book" else 0
-        return render_template("index.html", items=items, q=q, media_type=media_type, genre=genre,
+        return render_template("index.html", items=items, q=q, media_type=media_type,
+                               genres=genres, genre_match=genre_match,
+                               selected_keys={genre_key(g) for g in genres},
                                books_needing_details=needing,
                                location=location, origin=origin, sort=sort, sorts=sorts,
                                genre_options=genre_options, mode="hybrid" if semantic else "keyword",
@@ -379,7 +408,8 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         return jsonify(results=catalog().search(q, request.args.get("type") or None,
                                                 limit=int(request.args.get("limit", 20)),
                                                 semantic=request.args.get("mode") != "keyword",
-                                                genre=request.args.get("genre") or None))
+                                                genre=request.args.getlist("genre") or None,
+                                                genre_match=request.args.get("match", "any")))
 
     @app.get("/api/genres")
     def api_genres():

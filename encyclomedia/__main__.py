@@ -110,13 +110,15 @@ def main(argv=None):
     s.add_argument("--type", choices=MEDIA_TYPES)
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--keyword-only", action="store_true", help="skip semantic matching")
-    s.add_argument("--genre", help="only items with this genre")
+    s.add_argument("--genre", action="append", help="only items with this genre (repeat for several)")
+    s.add_argument("--all-genres", action="store_true", help="with several --genre: items must have all of them")
     s.add_argument("--location", help="only items stored here")
     s.add_argument("--origin", help="only items acquired from here")
 
     ls = sub.add_parser("list", help="list items")
     ls.add_argument("--type", choices=MEDIA_TYPES)
-    ls.add_argument("--genre", help="only items with this genre")
+    ls.add_argument("--genre", action="append", help="only items with this genre (repeat for several)")
+    ls.add_argument("--all-genres", action="store_true", help="with several --genre: items must have all of them")
     ls.add_argument("--location", help="only items stored here")
     ls.add_argument("--origin", help="only items acquired from here")
     ls.add_argument("--sort", choices=tuple(Catalog.SORTS), help="order (default: by type, or by title with --type)")
@@ -213,7 +215,8 @@ def main(argv=None):
 
         elif args.cmd == "search":
             results = cat.search(args.query, args.type, args.limit, semantic=not args.keyword_only,
-                                 genre=args.genre, location=args.location, origin=args.origin)
+                                 genre=args.genre, location=args.location, origin=args.origin,
+                                 genre_match="all" if args.all_genres else "any")
             for it in results:
                 print(one_line(it))
             if not results:
@@ -223,7 +226,8 @@ def main(argv=None):
                     print("Did you mean: " + ", ".join(hint) + "?")
 
         elif args.cmd == "list":
-            items = cat.list(args.type, args.genre, location=args.location, origin=args.origin, sort=args.sort)
+            items = cat.list(args.type, args.genre, location=args.location, origin=args.origin, sort=args.sort,
+                             genre_match="all" if args.all_genres else "any")
             for it in items:
                 print(one_line(it))
             if not items:

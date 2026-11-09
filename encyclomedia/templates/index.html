@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set active_tab = media_type or 'all' %}
 {% set t = media_type %}
-{% set filtering = q or genre or location or origin %}
+{% set filtering = q or genres or location or origin %}
 {% block title %}{{ TYPE_TITLE[t] ~ ' · ' if t }}EncycloMedia{% endblock %}
 {% block head %}
 <style>
@@ -33,6 +33,14 @@
   .bar { height: 4px; width: 70px; background: var(--line); border-radius: 2px; margin-top: 4px; }
   .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
   .active-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; font-size: 14px; flex-wrap: wrap; }
+  .genre-filter { margin-bottom: 4px; }
+  .genre-filter .joiner { font-size: 12px; color: var(--muted); }
+  .genre-filter .match { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden;
+                         margin-left: 6px; font-size: 12px; }
+  .genre-filter .match a { padding: 1px 10px; color: var(--muted); text-decoration: none; }
+  .genre-filter .match a.on { background: var(--ink); color: var(--panel); }
+  .genre-filter .clear-genres { font-size: 13px; margin-left: 4px; }
+  .genre-hint { font-size: 12px; margin: 0 0 14px; }
   .empty { text-align: center; padding: 40px 16px; background: var(--panel); border: 1px dashed var(--line);
            border-radius: 12px; }
   .empty p { margin: 0 0 14px; }
@@ -79,15 +87,19 @@
   <input name="q" value="{{ q }}" autofocus
          placeholder="{{ 'Search ' ~ TYPE_TITLE[t]|lower ~ ': titles, people, genres, tags, notes…' if t else 'Search titles, people, genres, tags, notes…' }}">
   {% if not t %}
-  <select name="type" onchange="this.form.genre.value=''; this.form.submit()" aria-label="Media type">
+  <select name="type" aria-label="Media type"
+          onchange="this.form.querySelectorAll('[name=genre]').forEach(e => e.disabled = true); this.form.submit()">
     <option value="">All media</option>
     {% for m in MEDIA_TYPES %}<option value="{{ m }}">{{ TYPE_TITLE[m] }}</option>{% endfor %}
   </select>
   {% endif %}
-  <select name="genre" onchange="this.form.submit()" aria-label="Genre">
-    <option value="">All genres</option>
-    {% for g in genre_options %}
-      <option value="{{ g.name }}" {{ 'selected' if genre and g.name|lower == genre|lower }}>{{ g.name }} ({{ g.count }})</option>
+  {# The genres already selected travel along as hidden fields; the menu adds one more. #}
+  {% for g in genres %}<input type="hidden" name="genre" value="{{ g }}">{% endfor %}
+  {% if genre_match == 'all' %}<input type="hidden" name="match" value="all">{% endif %}
+  <select name="genre" onchange="this.form.submit()" aria-label="Add a genre">
+    <option value="">{{ '+ Add a genre' if genres else 'All genres' }}</option>
+    {% for g in genre_options if genre_key(g.name) not in selected_keys %}
+      <option value="{{ g.name }}">{{ g.name }} ({{ g.count }})</option>
     {% endfor %}
   </select>
   {% if location %}<input type="hidden" name="location" value="{{ location }}">{% endif %}
@@ -105,11 +117,31 @@
   </div>
 </form>
 
-{% set keep = {'q': q, 'type': t or '', 'genre': genre or '', 'location': location or '', 'origin': origin or '',
+{% set keep = {'q': q, 'type': t or '', 'genre': genres, 'match': 'all' if genre_match == 'all' else '',
+               'location': location or '', 'origin': origin or '',
                'sort': sort if sort != sorts[0][0] else ''} %}
-{% if genre or location or origin %}
+{% if genres %}
+  <div class="active-filter genre-filter">
+    {{ 'Genres' if genres|length > 1 else 'Genre' }}:
+    {% for g in genres %}
+      {% if not loop.first %}<span class="joiner">{{ 'and' if genre_match == 'all' else 'or' }}</span>{% endif %}
+      <a class="chip active" href="{{ genre_toggle_url(keep, g) }}" title="Remove {{ g }}">{{ g }} ✕</a>
+    {% endfor %}
+    {% if genres|length > 1 %}
+      <span class="match" role="group" aria-label="How to combine genres">
+        <a class="{{ 'on' if genre_match == 'any' }}" href="{{ browse_url(keep, drop='match') }}"
+           title="Items with at least one of these genres">Any</a>
+        <a class="{{ 'on' if genre_match == 'all' }}" href="{{ browse_url(keep, match='all') }}"
+           title="Only items with every one of these genres">All</a>
+      </span>
+    {% endif %}
+    <a class="clear-genres" href="{{ browse_url(keep, drop='genre') }}">Clear genres</a>
+  </div>
+  <p class="genre-hint muted">Click genre tags on the items below to add or remove them.</p>
+{% endif %}
+{% if location or origin %}
   <div class="active-filter">
-    {% for key, name in (('genre', 'Genre'), ('location', 'Location'), ('origin', 'Origin')) if keep[key] %}
+    {% for key, name in (('location', 'Location'), ('origin', 'Origin')) if keep[key] %}
       {{ name }}:
       <a class="chip active" href="{{ browse_url(keep, drop=key) }}" title="Remove filter">{{ keep[key] }} ✕</a>
     {% endfor %}
@@ -126,7 +158,8 @@
     <span class="muted">Best matches first</span>
   {% else %}
   <form method="get" action="{{ browse_url({'type': t}) }}">
-    {% for key in ('genre', 'location', 'origin') if keep[key] %}<input type="hidden" name="{{ key }}" value="{{ keep[key] }}">{% endfor %}
+    {% for g in genres %}<input type="hidden" name="genre" value="{{ g }}">{% endfor %}
+    {% for key in ('match', 'location', 'origin') if keep[key] %}<input type="hidden" name="{{ key }}" value="{{ keep[key] }}">{% endfor %}
     <label>Sort by
       <select name="sort" onchange="this.form.submit()">
         {% for value, name in sorts %}<option value="{{ value }}" {{ 'selected' if sort == value }}>{{ name }}</option>{% endfor %}
@@ -172,8 +205,9 @@
       {% if it.genres %}
       <div class="chips">
         {% for g in it.genres %}
-          <a class="chip {{ 'active' if genre and g|lower == genre|lower }}"
-             href="{{ browse_url({'type': t, 'genre': g, 'sort': keep.sort}) }}">{{ g }}</a>
+          {% set on = genre_key(g) in selected_keys %}
+          <a class="chip {{ 'active' if on }}" href="{{ genre_toggle_url(keep, g) }}"
+             title="{{ ('Remove ' ~ g ~ ' from') if on else ('Add ' ~ g ~ ' to') }} the selected genres">{{ g }}</a>
         {% endfor %}
       </div>
       {% endif %}
