@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% set active_tab = 'music' %}
+{% block title %}Artists · EncycloMedia{% endblock %}
+{% block head %}
+<style>
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+               margin-bottom: 14px; }
+  .page-head h1 { font-family: Georgia, "Times New Roman", serif; font-size: 30px; margin: 0; line-height: 1.1; }
+  .page-head .stats { font-size: 14px; margin-top: 4px; }
+  .intro { margin: 0 0 16px; max-width: 760px; font-size: 14px; }
+  .toolbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+             padding: 10px 0; background: var(--bg); border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .toolbar input { flex: 1; min-width: 180px; }
+  .toolbar .unsaved { font-size: 13px; color: var(--accent); }
+  .letter { font-family: Georgia, serif; font-size: 22px; margin: 20px 0 6px; color: var(--music); }
+  .rows { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center;
+         padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row.changed { background: var(--chip); }
+  .who b { font-size: 15px; }
+  .who a { color: inherit; text-decoration: none; }
+  .who a:hover { color: var(--accent); }
+  .who .meta { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .who .filed { font-size: 13px; color: var(--muted); }
+  .who .filed strong { color: var(--ink); font-weight: 600; }
+  .choice { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg label { display: flex; align-items: center; padding: 5px 10px; font-size: 13px; cursor: pointer;
+               border-right: 1px solid var(--line); color: var(--muted); user-select: none; }
+  .seg label:last-child { border-right: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--accent-ink); }
+  .seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .seg label:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+  .custom { width: 170px; padding: 5px 8px; font-size: 13px; }
+  .custom[hidden] { display: none; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 20px; }
+  .empty { text-align: center; padding: 40px 16px; background: var(--panel); border: 1px dashed var(--line);
+           border-radius: 12px; }
+  .nomatch { display: none; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: 1fr; }
+    .choice { justify-content: flex-start; }
+    .custom { width: 100%; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Artists</h1>
+    <div class="stats muted">
+      {{ artists|length }} artist{{ '' if artists|length == 1 else 's' }}
+      · {{ solo_count }} filed by surname
+    </div>
+  </div>
+  <a class="btn" href="{{ browse_url({'type': 'music', 'sort': 'creator'}) }}">Music by artist</a>
+</div>
+<p class="intro muted">
+  Choose how each artist is alphabetized. <b>Band</b> files the name as written, ignoring a leading “The”
+  (The Beatles → B). <b>Solo artist</b> files by surname (Kate Bush → Bush, Kate). <b>Custom</b> lets you
+  type exactly where it goes. A setting applies to all of that artist's albums.
+</p>
+
+{% if not artists %}
+  <div class="empty">
+    <p>No artists yet. Add some music and they'll appear here.</p>
+    <a class="btn primary" href="{{ url_for('add', type='music') }}">Add an album</a>
+  </div>
+{% else %}
+<form method="post" id="artistsForm">
+  <input type="hidden" name="count" value="{{ artists|length }}">
+  <div class="toolbar">
+    <input type="search" id="filter" placeholder="Find an artist…" aria-label="Find an artist">
+    <span class="unsaved" id="unsaved" hidden>Unsaved changes</span>
+    <button class="primary" type="submit">Save</button>
+  </div>
+
+  {% for letter, group in artists|groupby('letter') %}
+  <section class="group" data-letter="{{ letter }}">
+    <h2 class="letter">{{ letter }}</h2>
+    <div class="rows">
+      {% for a in group %}
+      {% set i = a.i %}
+      <div class="row" data-name="{{ a.name|lower }}">
+        <input type="hidden" name="name_{{ i }}" value="{{ a.name }}">
+        <div class="who">
+          <b><a href="{{ browse_url({'type': 'music', 'q': a.name}) }}">{{ a.name }}</a></b>
+          <div class="meta">{{ a.count }} album{{ '' if a.count == 1 else 's' }}</div>
+          <div class="filed">Filed under <strong class="filed-as">{{ a.file_under }}</strong></div>
+        </div>
+        <div class="choice">
+          <div class="seg" role="radiogroup" aria-label="How to file {{ a.name }}">
+            <label><input type="radio" name="kind_{{ i }}" value="band" {{ 'checked' if a.kind == 'band' }}
+                          data-filed="{{ a.name }}">Band</label>
+            <label title="{{ 'A one-word name has no surname' if a.one_word else 'File under ' ~ a.surname }}">
+              <input type="radio" name="kind_{{ i }}" value="solo" {{ 'checked' if a.kind == 'solo' }}
+                     {{ 'disabled' if a.one_word }} data-filed="{{ a.surname }}">Solo artist</label>
+            <label><input type="radio" name="kind_{{ i }}" value="custom" {{ 'checked' if a.kind == 'custom' }}>Custom</label>
+          </div>
+          <input class="custom" name="custom_{{ i }}" value="{{ a.setting if a.kind == 'custom' else '' }}"
+                 placeholder="File under…" aria-label="Custom file-under name for {{ a.name }}"
+                 {{ 'hidden' if a.kind != 'custom' }}>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  <p class="nomatch muted" id="nomatch">No artists match.</p>
+
+  <div class="actions">
+    <button class="primary" type="submit">Save</button>
+    <span class="muted" style="font-size:13px">Changes are saved for all artists at once.</span>
+  </div>
+</form>
+
+<script>
+(() => {
+  const form = document.getElementById('artistsForm');
+  const unsaved = document.getElementById('unsaved');
+  let dirty = false;
+
+  // Show what each choice does, and the custom box only for "Custom".
+  form.querySelectorAll('.row').forEach(row => {
+    const custom = row.querySelector('.custom'), shown = row.querySelector('.filed-as');
+    const update = () => {
+      const picked = row.querySelector('input[type=radio]:checked');
+      custom.hidden = picked.value !== 'custom';
+      shown.textContent = picked.value === 'custom' ? (custom.value.trim() || '…') : picked.dataset.filed;
+    };
+    row.addEventListener('change', e => {
+      if (e.target.value === 'custom') custom.focus();
+      row.classList.add('changed'); dirty = true; unsaved.hidden = false; update();
+    });
+    custom.addEventListener('input', () => {
+      row.querySelector('input[value=custom]').checked = true;
+      row.classList.add('changed'); dirty = true; unsaved.hidden = false; update();
+    });
+  });
+
+  // Find an artist: hide rows (and empty letters) that don't match.
+  document.getElementById('filter').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    let any = false;
+    form.querySelectorAll('.group').forEach(g => {
+      let shown = 0;
+      g.querySelectorAll('.row').forEach(r => { const on = !q || r.dataset.name.includes(q); r.hidden = !on; shown += on; });
+      g.hidden = !shown; any = any || shown > 0;
+    });
+    document.getElementById('nomatch').style.display = any ? 'none' : 'block';
+  });
+
+  // Don't lose unsaved choices by navigating away by accident.
+  form.addEventListener('submit', () => { dirty = false; });
+  addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+{% endif %}
+{% endblock %}
