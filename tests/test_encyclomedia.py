@@ -1,4 +1,5 @@
 """Run with:  python -m pytest -q"""
+import html
 import io
 import json
 import re
@@ -1366,3 +1367,33 @@ def test_artists_links(band_cat, tmp_path):
     empty = create_app(tmp_path / "none.db")
     empty.testing = True
     assert "No artists yet." in empty.test_client().get("/artists").get_data(as_text=True)
+
+
+# --------------------------------------------------------------------------- punctuation and accents
+def test_sort_name_skips_leading_punctuation_and_accents():
+    from encyclomedia.catalog import sort_name
+    assert sort_name('"Experience" Jimi Hendrix - Original Motion Picture Soundtrack').startswith("experience")
+    assert sort_name("...Somewhere More Familiar") == "somewhere more familiar"
+    assert sort_name("(What's the Story) Morning Glory?").startswith("what's")
+    assert sort_name('"The Wall"') == 'wall"'                 # quote, then "The", both skipped
+    assert sort_name("¡Viva!") == "viva!" and sort_name("'Til Tuesday") == "til tuesday"
+    assert sort_name("Élan") == "elan"                         # accents don't push titles past Z
+    assert sort_name("!!!") == "!!!"                           # all punctuation: kept as is
+
+
+def test_titles_with_leading_punctuation_sort_into_place(tmp_path):
+    cat = Catalog(tmp_path / "p.db")
+    titles = ['"Experience" Jimi Hendrix - Original Motion Picture Soundtrack', "...Somewhere More Familiar",
+              "Abbey Road", "(What's the Story) Morning Glory?", "Élan", "Kind of Blue", "The Wall", "Rumours",
+              "Electric Ladyland", "Sound of Silver"]
+    for t in titles:
+        cat.add("music", t)
+    expected = ["Abbey Road", "Élan", "Electric Ladyland",
+                '"Experience" Jimi Hendrix - Original Motion Picture Soundtrack', "Kind of Blue", "Rumours",
+                "...Somewhere More Familiar", "Sound of Silver", "The Wall", "(What's the Story) Morning Glory?"]
+    assert [i["title"] for i in cat.list("music", sort="title")] == expected
+    app = create_app(cat.db_path)
+    app.testing = True
+    page = app.test_client().get("/music").get_data(as_text=True)
+    shown = re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', page)
+    assert [html.unescape(t) for t in shown] == expected       # shown exactly as written, in this order

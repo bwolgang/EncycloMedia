@@ -22,6 +22,7 @@ import io
 import json
 import re
 import sqlite3
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -146,13 +147,22 @@ END;
 
 
 _LEADING_THE = re.compile(r"^the\s+", re.I)
+_LEADING_PUNCT = re.compile(r"^[\W_]+")   # quotes, dots, brackets, dashes... before the first letter or digit
 
 
 def sort_name(name) -> str:
-    """How a title or name is alphabetized: case-insensitive, ignoring a leading "The",
-    so The Beatles sorts with the B's and The Shining with the S's. ("The The" stays "The".)"""
+    """How a title or name is alphabetized. Case and accents are ignored (Élan files with
+    the E's), and so are leading punctuation and a leading "The":
+        '"Experience" Jimi Hendrix'      -> experience" jimi hendrix
+        '...Somewhere More Familiar'      -> somewhere more familiar
+        '(What's the Story) Morning Glory?' -> what's the story) morning glory?
+        'The Beatles' / '"The Wall"'      -> beatles / wall"
+    Names that are nothing but punctuation ('!!!') or just "The The" are kept as they are."""
     text = " ".join(str(name or "").split())
-    return (_LEADING_THE.sub("", text) or text).casefold()
+    plain = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    trimmed = _LEADING_PUNCT.sub("", plain)
+    key = _LEADING_PUNCT.sub("", _LEADING_THE.sub("", trimmed))
+    return (key or trimmed or plain).casefold()
 
 
 def name_key(name) -> str:

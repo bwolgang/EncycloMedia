@@ -39,8 +39,11 @@ The tabs along the top switch between **All** and a page for each media type:
   and its **Add** button starts a new item of that type.
 - **Sort by** title, creator (Author / Artist / Director / Game studio), year (newest or oldest), or recently
   added. Search results are always sorted by best match.
-- **Alphabetical order ignores a leading "The"** for titles and names: The Shining files with the S's and
-  The Beatles with the B's. Names and titles are still shown in full.
+- **Alphabetical order skips what comes before the first real word** in titles and names: a leading "The",
+  and leading punctuation such as quotes, periods, brackets and dashes. So The Shining files with the S's,
+  "Experience" with the E's, ...Somewhere More Familiar with the S's and (What's the Story) Morning Glory?
+  with the W's. Accents are ignored too (Élan files with the E's). Titles and names are still shown exactly
+  as written.
 - **Sorting by creator:**
   - Authors and directors file by **surname** automatically (Herbert, Frank). Lowercase particles go after
     the given name (Beethoven, Ludwig van), capitalized ones stay with the surname (Le Guin, Ursula K.), and
