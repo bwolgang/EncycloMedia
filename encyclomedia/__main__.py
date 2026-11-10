@@ -71,6 +71,8 @@ def add_core_args(p):
     used_by = {f: t for t, fs in CREDIT_FIELDS.items() for f in fs}
     for f in used_by:
         p.add_argument(f"--{f}", help=f"{CREDIT_LABELS[f].lower()} ({used_by[f]}s); separate several with commas")
+    p.add_argument("--file-under", metavar="NAME",
+                   help='how the creator is alphabetized, e.g. "Bush, Kate" (blank: automatic)')
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
                    help="type-specific field, repeatable (e.g. --field isbn=978... --field platform=PS5)")
 
@@ -197,7 +199,13 @@ def main(argv=None):
                 title = best["title"]
                 fields = {**{k: best[k] for k in CORE_FIELDS if k != "title" and best.get(k)}, **fields}
                 extra = {**{k: v for k, v in best["extra"].items() if k in EXTRA_FIELDS[args.media_type]}, **extra}
-            print(f"Added item #{cat.add(args.media_type, title, extra=extra, **fields)}")
+            item_id = cat.add(args.media_type, title, extra=extra, **fields)
+            creator = fields.get("creator")
+            if creator and args.file_under is not None:
+                cat.set_file_under(creator, args.file_under, args.media_type)
+            elif creator and args.lookup and best.get("creator_sort"):
+                cat.set_file_under(creator, best["creator_sort"], args.media_type)
+            print(f"Added item #{item_id}")
 
         elif args.cmd == "lookup":
             cands = metadata.lookup(args.media_type, args.query)
@@ -211,7 +219,10 @@ def main(argv=None):
                 c = cands[args.add - 1]
                 core = {k: c[k] for k in CORE_FIELDS if k != "title" and c.get(k)}
                 extra = {k: v for k, v in c["extra"].items() if k in EXTRA_FIELDS[args.media_type]}
-                print(f"Added item #{cat.add(args.media_type, c['title'], extra=extra, **core)}")
+                item_id = cat.add(args.media_type, c["title"], extra=extra, **core)
+                if c.get("creator") and c.get("creator_sort"):
+                    cat.set_file_under(c["creator"], c["creator_sort"], args.media_type)
+                print(f"Added item #{item_id}")
 
         elif args.cmd == "search":
             results = cat.search(args.query, args.type, args.limit, semantic=not args.keyword_only,
@@ -254,6 +265,10 @@ def main(argv=None):
             changes = {**parse_kv(args.field), **copy_args(args)}
             extra = {**current["extra"], **changes} if changes else None
             cat.update(args.id, extra=extra, **fields)
+            if args.file_under is not None:
+                item = cat.get(args.id)
+                if item.get("creator"):
+                    cat.set_file_under(item["creator"], args.file_under, item["media_type"])
             print("Saved.")
 
         elif args.cmd == "genres":

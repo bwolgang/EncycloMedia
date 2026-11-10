@@ -39,6 +39,22 @@ The tabs along the top switch between **All** and a page for each media type:
   and its **Add** button starts a new item of that type.
 - **Sort by** title, creator (Author / Artist / Director / Game studio), year (newest or oldest), or recently
   added. Search results are always sorted by best match.
+- **Alphabetical order ignores a leading "The"** for titles and names: The Shining files with the S's and
+  The Beatles with the B's. Names and titles are still shown in full.
+- **Sorting by creator:**
+  - Authors and directors file by **surname** automatically (Herbert, Frank). Lowercase particles go after
+    the given name (Beethoven, Ludwig van), capitalized ones stay with the surname (Le Guin, Ursula K.), and
+    "Jr." is set aside.
+  - Artists and game studios file as written, because a band's name can't be told from a person's.
+  - The **File under** box in the form changes how any creator is filed, and the change applies to all of their
+    items. For music, **Solo artist: use surname** fills it in (Kate Bush → Bush, Kate). MusicBrainz
+    auto-fill sets it for you. Leave it blank for automatic filing.
+  - Within one creator, items are listed oldest first.
+- **Artists page** (`/artists`, linked in the header and on the Music page): every artist in your music
+  collection, grouped by the letter they're filed under, with an album count. For each artist, choose
+  **Band** (as written), **Solo artist** (by surname) or **Custom**, then click **Save** once. Use the
+  **Find an artist** box to filter a long list. Unsaved changes are highlighted, and the page warns you before
+  you leave without saving.
 - **Export CSV** on a type page exports just that type (`/export.csv?type=music`).
 - An item's details page highlights its tab, and its breadcrumb and genre chips lead back to its type page.
 - Older links such as `/?type=book` redirect to the matching page.
@@ -197,6 +213,7 @@ python -m encyclomedia add book "Watchmen" --creator "Alan Moore" --illustrator 
 python -m encyclomedia add movie "Interstellar" --creator "Christopher Nolan" --composer "Hans Zimmer"
 python -m encyclomedia add music "Faces" --creator "Mac Miller" --performers "Rick Ross" --label "REMember"
 python -m encyclomedia add game "Stardew Valley" --creator "ConcernedApe" --designer "Eric Barone"
+python -m encyclomedia add music "Hounds of Love" --creator "Kate Bush" --file-under "Bush, Kate"
 python -m encyclomedia locations                                # or: locations --origins
 python -m encyclomedia search "mac" --genre hip-hop
 python -m encyclomedia list --genre Rock --genre "Psychedelic rock"           # either genre

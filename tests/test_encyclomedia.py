@@ -902,7 +902,7 @@ def test_sorting(web, cat):
     titles = lambda html: re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', html)
     assert titles(web.get("/books").get_data(as_text=True)) == ["Dune", "Mythos", "Neuromancer"]
     assert titles(web.get("/books?sort=newest").get_data(as_text=True)) == ["Neuromancer", "Dune", "Mythos"]  # no year -> last
-    assert titles(web.get("/books?sort=creator").get_data(as_text=True)) == ["Dune", "Mythos", "Neuromancer"]
+    assert titles(web.get("/books?sort=creator").get_data(as_text=True)) == ["Mythos", "Neuromancer", "Dune"]  # Fry, Gibson, Herbert
     assert titles(web.get("/books?sort=added").get_data(as_text=True))[0] == "Neuromancer"
     page = web.get("/books").get_data(as_text=True)
     assert '<option value="creator" >Author</option>' in page or ">Author</option>" in page
@@ -1166,3 +1166,203 @@ def test_cli_several_genres(rock, capsys):
           "--all-genres"])
     out = capsys.readouterr().out
     assert "Piper" in out and "Abbey Road" not in out
+
+
+# --------------------------------------------------------------------------- "The" in artist sorting
+def test_sort_name_ignores_leading_the():
+    from encyclomedia.catalog import sort_name
+    assert sort_name("The Beatles") == "beatles"
+    assert sort_name("  THE   Kinks ") == "kinks"
+    assert sort_name("The The") == "the"                 # the band called The The
+    assert sort_name("Theory of a Deadman") == "theory of a deadman"   # only the whole word "The"
+    assert sort_name("Thelonious Monk") == "thelonious monk"
+    assert sort_name(None) == ""
+
+
+def test_artists_sort_ignoring_the(tmp_path):
+    cat = Catalog(tmp_path / "bands.db")
+    for artist in ("The Kinks", "Pink Floyd", "The Beatles", "ABBA", "The Cranberries", "Coldplay",
+                   "Thelonious Monk", "Fleetwood Mac", "Kate Bush"):
+        cat.add("music", f"Album by {artist}", creator=artist)
+    order = [i["creator"] for i in cat.list("music", sort="creator")]
+    assert order == ["ABBA", "The Beatles", "Coldplay", "The Cranberries", "Fleetwood Mac",
+                     "Kate Bush", "The Kinks", "Pink Floyd", "Thelonious Monk"]
+    # The web page's "Sort by Artist" uses the same order, and names still display in full.
+    app = create_app(cat.db_path)
+    app.testing = True
+    page = app.test_client().get("/music?sort=creator").get_data(as_text=True)
+    shown = re.findall(r'<h3><a href="/item/\d+">Album by ([^<]+)</a></h3>', page)
+    assert shown == order
+
+
+# --------------------------------------------------------------------------- titles and surnames
+def test_surname_first():
+    from encyclomedia.catalog import surname_first as s
+    assert s("Kate Bush") == "Bush, Kate"
+    assert s("Martin Luther King Jr.") == "King, Martin Luther, Jr."
+    assert s("Ludwig van Beethoven") == "Beethoven, Ludwig van"     # lowercase particle moves
+    assert s("Ursula K. Le Guin") == "Le Guin, Ursula K."           # capitalized one stays
+    assert s("Neil Gaiman, Terry Pratchett") == "Gaiman, Neil"      # first credited person decides
+    assert s("Madonna") == "Madonna"
+
+
+def test_titles_ignore_leading_the(tmp_path):
+    cat = Catalog(tmp_path / "t.db")
+    for title in ("The Shining", "Spirited Away", "Arrival", "The Thing", "Theodora"):
+        cat.add("movie", title)
+    assert [i["title"] for i in cat.list("movie", sort="title")] == [
+        "Arrival", "The Shining", "Spirited Away", "Theodora", "The Thing"]
+    assert [i["title"] for i in cat.list("movie")] == [i["title"] for i in cat.list("movie", sort="title")]
+
+
+def test_people_file_by_surname_bands_as_written(tmp_path):
+    cat = Catalog(tmp_path / "s.db")
+    for artist in ("Kate Bush", "The Beatles", "Pink Floyd", "Fleetwood Mac", "Miles Davis", "ABBA"):
+        cat.add("music", f"Album by {artist}", creator=artist)
+    order = lambda: [i["creator"] for i in cat.list("music", sort="creator")]
+    # Without settings, artists file as written (bands can't be told from people by name alone).
+    assert order() == ["ABBA", "The Beatles", "Fleetwood Mac", "Kate Bush", "Miles Davis", "Pink Floyd"]
+    cat.set_file_under("Kate Bush", "Bush, Kate", "music")
+    cat.set_file_under("miles  davis", "Davis, Miles", "music")       # matched however it's typed
+    assert order() == ["ABBA", "The Beatles", "Kate Bush", "Miles Davis", "Fleetwood Mac", "Pink Floyd"]
+    # Authors and directors file by surname automatically.
+    for author in ("Stephen Fry", "Frank Herbert", "William Gibson", "Ursula K. Le Guin"):
+        cat.add("book", f"Book by {author}", creator=author)
+    assert [i["creator"] for i in cat.list("book", sort="creator")] == [
+        "Stephen Fry", "William Gibson", "Frank Herbert", "Ursula K. Le Guin"]
+    # Setting the automatic value (or blank) removes the setting; MusicBrainz-style "Beatles, The" counts as automatic.
+    cat.set_file_under("Kate Bush", "", "music")
+    cat.set_file_under("The Beatles", "Beatles, The", "music")
+    assert cat.file_under_setting("Kate Bush") is None and cat.file_under_setting("The Beatles") is None
+    cat.set_file_under("Frank Herbert", "Herbert, Frank", "book")
+    assert cat.file_under_setting("Frank Herbert") is None
+
+
+def test_web_file_under_and_solo_artist_api(tmp_path):
+    app = create_app(tmp_path / "w.db")
+    app.testing = True
+    client = app.test_client()
+    info = client.get("/api/file-under?type=music&name=Kate+Bush").get_json()
+    assert info == {"setting": None, "automatic": "Kate Bush", "surname": "Bush, Kate"}
+    assert client.get("/api/file-under?type=book&name=Frank+Herbert").get_json()["automatic"] == "Herbert, Frank"
+
+    client.post("/add", data={"media_type": "music", "title": "Hounds of Love", "creator": "Kate Bush",
+                              "file_under": "Bush, Kate"})
+    client.post("/add", data={"media_type": "music", "title": "Abbey Road", "creator": "The Beatles",
+                              "file_under": ""})
+    cat = Catalog(tmp_path / "w.db")
+    assert cat.file_under_setting("Kate Bush") == "Bush, Kate"
+    # Adding another album with the box left blank keeps how the artist is filed.
+    client.post("/add", data={"media_type": "music", "title": "The Kick Inside", "creator": "Kate Bush",
+                              "file_under": ""})
+    assert cat.file_under_setting("Kate Bush") == "Bush, Kate"
+    titles = re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>',
+                        client.get("/music?sort=creator").get_data(as_text=True))
+    assert titles == ["Abbey Road", "Hounds of Love", "The Kick Inside"]   # Beatles, then Bush's albums by title
+
+    hounds = cat.search("hounds")[0]
+    edit_page = client.get(f"/item/{hounds['id']}/edit").get_data(as_text=True)
+    assert 'name="file_under" value="Bush, Kate"' in edit_page and "Solo artist: use surname" in edit_page
+    # Clearing the box while editing the same artist goes back to automatic.
+    client.post(f"/item/{hounds['id']}/edit", data={"media_type": "music", "title": "Hounds of Love",
+                                                    "creator": "Kate Bush", "file_under": ""})
+    assert cat.file_under_setting("Kate Bush") is None
+
+
+def test_musicbrainz_sort_name_is_used():
+    r = {"id": "x", "title": "Hounds of Love", "artist-credit": [
+        {"name": "Kate Bush", "joinphrase": "", "artist": {"name": "Kate Bush", "sort-name": "Bush, Kate"}}]}
+    assert metadata.parse_musicbrainz_release(r)["creator_sort"] == "Bush, Kate"
+    duo = {"id": "y", "title": "Watch the Throne", "artist-credit": [
+        {"name": "JAY-Z", "joinphrase": " & ", "artist": {"sort-name": "JAY-Z"}},
+        {"name": "Kanye West", "joinphrase": "", "artist": {"sort-name": "West, Kanye"}}]}
+    assert metadata.parse_musicbrainz_release(duo)["creator_sort"] is None
+
+
+def test_cli_file_under(tmp_path, capsys):
+    from encyclomedia.__main__ import main
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "--no-semantic", "add", "music", "Hounds of Love", "--creator", "Kate Bush",
+          "--file-under", "Bush, Kate"])
+    main(["--db", db, "--no-semantic", "add", "music", "Abbey Road", "--creator", "The Beatles"])
+    capsys.readouterr()
+    main(["--db", db, "--no-semantic", "list", "--type", "music", "--sort", "creator"])
+    out = capsys.readouterr().out
+    assert out.index("The Beatles") < out.index("Kate Bush")
+    main(["--db", db, "--no-semantic", "edit", "1", "--file-under", ""])
+    assert Catalog(db).file_under_setting("Kate Bush") is None
+
+
+# --------------------------------------------------------------------------- Artists page
+@pytest.fixture
+def band_cat(tmp_path):
+    c = Catalog(tmp_path / "artists.db")
+    for title, artist in (("Abbey Road", "The Beatles"), ("Revolver", "The Beatles"),
+                          ("Hounds of Love", "Kate Bush"), ("Kind of Blue", "Miles Davis"),
+                          ("Rumours", "Fleetwood Mac"), ("Ray of Light", "Madonna"),
+                          ("Swimming", "Mac Miller"), ("Dune", "Frank Herbert")):
+        c.add("book" if title == "Dune" else "music", title, creator=artist)
+    return c
+
+
+def test_creators_listing(band_cat):
+    band_cat.set_file_under("Kate Bush", "Bush, Kate", "music")
+    band_cat.set_file_under("Mac Miller", "Miller, Mac (rapper)", "music")
+    rows = {a["name"]: a for a in band_cat.creators("music")}
+    assert "Frank Herbert" not in rows                                     # only music
+    assert rows["The Beatles"]["count"] == 2 and rows["The Beatles"]["kind"] == "band"
+    assert rows["Kate Bush"]["kind"] == "solo" and rows["Kate Bush"]["letter"] == "B"
+    assert rows["Mac Miller"]["kind"] == "custom" and rows["Mac Miller"]["letter"] == "M"
+    assert rows["Madonna"]["one_word"]
+    assert [a["name"] for a in band_cat.creators("music")] == [
+        "The Beatles", "Kate Bush", "Fleetwood Mac", "Madonna", "Miles Davis", "Mac Miller"]  # Mac Miller is custom-filed
+
+
+def test_artists_page_marks_several_at_once(band_cat):
+    app = create_app(band_cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    page = client.get("/artists").get_data(as_text=True)
+    flat = " ".join(page.split())
+    assert "<h1>Artists</h1>" in page and "6 artists · 0 filed by surname" in flat
+    assert re.search(r'class="tab active" href="/music"', page)              # lives under Music
+    names = dict((m[1], int(m[0])) for m in re.findall(r'name="name_(\d+)" value="([^"]+)"', page))
+    assert set(names) == {"The Beatles", "Kate Bush", "Fleetwood Mac", "Madonna", "Mac Miller", "Miles Davis"}
+    assert re.search(rf'name="kind_{names["Madonna"]}" value="solo"\s+disabled', page)   # no surname to use
+
+    form = {"count": str(len(names))}
+    for name, i in names.items():
+        form[f"name_{i}"] = name
+        form[f"kind_{i}"] = "band"
+    form[f"kind_{names['Kate Bush']}"] = "solo"
+    form[f"kind_{names['Miles Davis']}"] = "solo"
+    form[f"kind_{names['Mac Miller']}"] = "custom"
+    form[f"custom_{names['Mac Miller']}"] = "Miller, Mac"
+    resp = client.post("/artists", data=form)
+    assert resp.headers["Location"] == "/artists"
+    page = client.get("/artists").get_data(as_text=True)
+    assert "Saved. 3 artists re-filed." in page
+    assert "6 artists · 3 filed by surname" in " ".join(page.split())       # "Miller, Mac" is his surname form
+    assert band_cat.file_under_setting("Kate Bush") == "Bush, Kate"
+    assert band_cat.file_under_setting("Miles Davis") == "Davis, Miles"
+    assert band_cat.file_under_setting("Mac Miller") == "Miller, Mac"
+    assert band_cat.file_under_setting("The Beatles") is None
+    order = [i["creator"] for i in band_cat.list("music", sort="creator")]
+    assert order == ["The Beatles", "The Beatles", "Kate Bush", "Miles Davis", "Fleetwood Mac", "Madonna",
+                     "Mac Miller"]
+
+    # Switching an artist back to Band removes the setting.
+    form[f"kind_{names['Kate Bush']}"] = "band"
+    client.post("/artists", data=form)
+    assert band_cat.file_under_setting("Kate Bush") is None
+
+
+def test_artists_links(band_cat, tmp_path):
+    app = create_app(band_cat.db_path)
+    app.testing = True
+    client = app.test_client()
+    assert 'href="/artists">Artists</a>' in client.get("/music").get_data(as_text=True)
+    assert 'href="/artists">Artists</a>' in client.get("/books").get_data(as_text=True)  # header link
+    empty = create_app(tmp_path / "none.db")
+    empty.testing = True
+    assert "No artists yet." in empty.test_client().get("/artists").get_data(as_text=True)

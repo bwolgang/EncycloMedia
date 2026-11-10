@@ -11,6 +11,9 @@
   .full { grid-column: 1 / -1; }
   label { display: block; font-size: 13px; color: var(--muted); }
   label .hint { font-size: 12px; opacity: .75; }
+  .file-under-row { display: flex; gap: 8px; margin-top: 3px; }
+  .file-under-row button { flex: none; white-space: nowrap; font-size: 13px; padding: 5px 10px; }
+  @media (max-width: 780px) { .file-under-row { flex-wrap: wrap; } }
   fieldset.credits-set { border: 0; padding: 0; margin: 0; min-width: 0; display: grid;
                          grid-template-columns: 1fr 1fr; gap: 10px 14px; }
   fieldset.credits-set[hidden] { display: none; }
@@ -70,6 +73,16 @@
       <label class="full">Title <input name="title" value="{{ item.title or '' }}" required></label>
       <label><span id="creatorLabel">{{ CREATOR_LABEL[item.media_type] }}</span> <input name="creator" value="{{ item.creator or '' }}"></label>
       <label><span id="yearLabel">{{ YEAR_LABEL[item.media_type] }}</span> <input name="year" inputmode="numeric" value="{{ item.year or '' }}"></label>
+      <div class="full file-under">
+        <label for="fileUnder">File under <span class="hint">how the <span id="fileUnderWho">{{ CREATOR_LABEL[item.media_type]|lower }}</span>
+          is alphabetized; blank = automatic</span></label>
+        <div class="file-under-row">
+          <input id="fileUnder" name="file_under" value="{{ file_under }}" autocomplete="off"
+                 placeholder="{{ file_under_auto or 'Automatic' }}">
+          <button type="button" id="soloBtn" title="File this artist under their surname, e.g. Bush, Kate">
+            Solo artist: use surname</button>
+        </div>
+      </div>
       {# Further credits for each type; only the selected type's fieldset is shown and submitted. #}
       {% set credit_hints = {
           'illustrator': ('for comics and graphic novels', 'e.g. Dave Gibbons'),
@@ -205,6 +218,9 @@ function syncType() {
   document.getElementById('creatorLabel').textContent = CREATOR_LABEL[t];
   document.getElementById('yearLabel').textContent = YEAR_LABEL[t];
   document.getElementById('editionInput').placeholder = EDITION_HINT[t];
+  document.getElementById('fileUnderWho').textContent = CREATOR_LABEL[t].toLowerCase();
+  document.getElementById('soloBtn').hidden = t !== 'music';   // authors & directors already file by surname
+  if (typeof refreshFileUnder === 'function') refreshFileUnder(false);
   // Autocomplete only suggests genres already used for this media type.
   const list = document.getElementById('genreList');
   list.replaceChildren(...(GENRES_BY_TYPE[t] || []).map(name => {
@@ -217,6 +233,26 @@ function syncType() {
   });
 }
 form.querySelectorAll('input[name=media_type]').forEach(r => r.addEventListener('change', syncType));
+
+// ---- File under ---------------------------------------------------------------
+const fileUnder = document.getElementById('fileUnder');
+let fileUnderInfo = null;
+async function refreshFileUnder(nameChanged) {
+  const name = form.elements['creator'].value.trim();
+  if (!name) { fileUnder.placeholder = 'Automatic'; fileUnderInfo = null; return; }
+  try {
+    const res = await fetch(`{{ url_for('api_file_under') }}?type=${currentType()}&name=${encodeURIComponent(name)}`);
+    fileUnderInfo = await res.json();
+    fileUnder.placeholder = fileUnderInfo.automatic || 'Automatic';
+    // A new name: show how that creator is already filed (or blank for automatic).
+    if (nameChanged) fileUnder.value = fileUnderInfo.setting || '';
+  } catch (e) { /* offline or server stopped: the box still works by hand */ }
+}
+form.elements['creator'].addEventListener('change', () => refreshFileUnder(true));
+document.getElementById('soloBtn').addEventListener('click', async () => {
+  await refreshFileUnder(false);
+  if (fileUnderInfo && fileUnderInfo.surname) fileUnder.value = fileUnderInfo.surname;
+});
 syncType();
 
 
@@ -294,6 +330,7 @@ function fill(c) {
     if (c[k] != null && c[k] !== '') form.elements[k].value = c[k];
   }
   if (c.genre) { genres = []; addGenres(c.genre); }
+  if (c.creator) { fileUnder.value = c.creator_sort || ''; refreshFileUnder(false); }
   for (const [k, v] of Object.entries(c.extra || {})) {
     const el = form.querySelector(`fieldset[data-type="${c.media_type}"] [name="extra__${k}"]`);
     if (el) el.value = v;

@@ -78,6 +78,7 @@
         Fill in from ISBNs ({{ books_needing_details }})</button>
     </form>
     {% endif %}
+    {% if t == 'music' %}<a class="btn" href="{{ url_for('artists_page') }}">Artists</a>{% endif %}
     <a class="btn primary" href="{{ url_for('add', type=t) }}">Add {{ 'an album' if t == 'music' else 'a ' ~ ITEM_NOUN[t] }}</a>
   </div>
   {% endif %}

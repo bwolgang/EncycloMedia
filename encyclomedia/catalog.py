@@ -114,6 +114,12 @@ CREATE TABLE IF NOT EXISTS item_genres (
     PRIMARY KEY (item_id, genre_id)
 );
 CREATE INDEX IF NOT EXISTS item_genres_by_genre ON item_genres(genre_id);
+-- "File under" for a creator, e.g. Kate Bush -> "Bush, Kate". One row per name,
+-- shared by every item with that creator; names without a row are filed automatically.
+CREATE TABLE IF NOT EXISTS sort_names (
+    key     TEXT PRIMARY KEY,   -- name_key(creator)
+    sort_as TEXT NOT NULL
+);
 """
 
 FTS_SCHEMA = """
@@ -137,6 +143,54 @@ CREATE TRIGGER items_au AFTER UPDATE ON items BEGIN
     VALUES (new.id, new.title, new.creator, new.genre, new.tags, new.notes, new.extra_text);
 END;
 """
+
+
+_LEADING_THE = re.compile(r"^the\s+", re.I)
+
+
+def sort_name(name) -> str:
+    """How a title or name is alphabetized: case-insensitive, ignoring a leading "The",
+    so The Beatles sorts with the B's and The Shining with the S's. ("The The" stays "The".)"""
+    text = " ".join(str(name or "").split())
+    return (_LEADING_THE.sub("", text) or text).casefold()
+
+
+def name_key(name) -> str:
+    """The same creator however it's spaced or capitalized."""
+    return " ".join(str(name or "").split()).casefold()
+
+
+# Media types whose main credit is (almost always) a person, so it files by surname
+# automatically: authors and directors. Artists can be bands, and game studios are
+# companies, so those file as written unless given a "File under" name.
+PERSON_TYPES = ("book", "movie")
+
+_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "phd", "md"}
+# Lowercase particles go after the given name, as libraries do: Beethoven, Ludwig van.
+# Capitalized ones belong to the surname: Le Guin, Ursula K.; De Niro, Robert.
+_PARTICLES = {"van", "von", "de", "der", "den", "du", "da", "di", "del", "della", "la", "le", "ten", "ter"}
+
+
+def surname_first(name) -> str:
+    """'Kate Bush' -> 'Bush, Kate'; 'Martin Luther King Jr.' -> 'King, Martin Luther, Jr.';
+    'Ludwig van Beethoven' -> 'Beethoven, Ludwig van'; 'Ursula K. Le Guin' -> 'Le Guin, Ursula K.'.
+    With several people ('Neil Gaiman, Terry Pratchett') the first one decides.
+    A one-word name ('Madonna', 'Moebius') is left as it is."""
+    text = " ".join(str(name or "").split())
+    first = re.split(r"\s*(?:,|;|&|\band\b)\s*", text, maxsplit=1)[0] or text
+    words = first.split(" ")
+    suffix = []
+    while len(words) > 2 and words[-1].casefold().rstrip(",") in _SUFFIXES:
+        suffix.insert(0, words.pop())
+    if len(words) < 2:
+        return text
+    surname = [words.pop()]
+    while len(words) > 1 and words[-1].casefold() in _PARTICLES:
+        surname.insert(0, words.pop())
+    lower = [w for w in surname[:-1] if w.islower()]          # van, von... move after given name
+    surname = [w for w in surname if w not in lower]
+    out = f"{' '.join(surname)}, {' '.join(words + lower)}"
+    return out + (f", {' '.join(suffix)}" if suffix else "")
 
 
 def _clean(value):
@@ -189,6 +243,7 @@ class Catalog:
         self.db_path = str(db_path)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=check_same_thread)
         self.conn.row_factory = sqlite3.Row
+        self.conn.create_function("sort_name", 1, sort_name, deterministic=True)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.embedder = embedder
         self._migrate()
@@ -532,12 +587,13 @@ class Catalog:
         return self.to_dict(row) if row else None
 
     # Orderings for list(). Blank years and creators sort last.
+    # Titles ignore a leading "The" (The Shining files under S).
     SORTS = {
-        "type": "media_type, title COLLATE NOCASE",
-        "title": "title COLLATE NOCASE",
-        "creator": "creator IS NULL, creator COLLATE NOCASE, year IS NULL, year, title COLLATE NOCASE",
-        "newest": "year IS NULL, year DESC, title COLLATE NOCASE",
-        "oldest": "year IS NULL, year, title COLLATE NOCASE",
+        "type": "media_type, sort_name(title)",
+        "title": "sort_name(title)",
+        "creator": "sort_name(title)",   # then re-sorted in Python by file-under name; see list()
+        "newest": "year IS NULL, year DESC, sort_name(title)",
+        "oldest": "year IS NULL, year, sort_name(title)",
         "added": "added_at DESC, id DESC",
     }
 
@@ -549,8 +605,84 @@ class Catalog:
                                       genre_match=genre_match)
         sql = "SELECT * FROM items" + (f" WHERE {' AND '.join(clauses)}" if clauses else "")
         order = self.SORTS.get(sort) or self.SORTS["title" if media_type else "type"]
-        rows = self.conn.execute(f"{sql} ORDER BY {order}", args)
-        return [self.to_dict(r) for r in rows]
+        items = [self.to_dict(r) for r in self.conn.execute(f"{sql} ORDER BY {order}", args)]
+        if sort == "creator":
+            # Python sort, because filing depends on each creator's settings: people by
+            # surname, bands as written but ignoring "The". Within a creator, oldest first.
+            overrides = self._sort_overrides()
+            items.sort(key=lambda it: (not it.get("creator"), self.file_under_key(it, overrides),
+                                       it.get("year") is None, it.get("year") or 0, sort_name(it["title"])))
+        return items
+
+    # ------------------------------------------------------------------ filing creators
+    def _sort_overrides(self) -> dict[str, str]:
+        return {r["key"]: r["sort_as"] for r in self.conn.execute("SELECT key, sort_as FROM sort_names")}
+
+    @staticmethod
+    def automatic_file_under(name, media_type) -> str:
+        """Where a creator is filed without a File-under setting: authors and directors by
+        surname ('Herbert, Frank'); artists and studios as written ('The Beatles')."""
+        return surname_first(name) if media_type in PERSON_TYPES else " ".join(str(name or "").split())
+
+    def file_under(self, name, media_type) -> str:
+        """The File-under name in effect for a creator: its setting, or the automatic one."""
+        row = self.conn.execute("SELECT sort_as FROM sort_names WHERE key = ?", (name_key(name),)).fetchone()
+        return row["sort_as"] if row else self.automatic_file_under(name, media_type)
+
+    def file_under_setting(self, name) -> str | None:
+        row = self.conn.execute("SELECT sort_as FROM sort_names WHERE key = ?", (name_key(name),)).fetchone()
+        return row["sort_as"] if row else None
+
+    def set_file_under(self, name, sort_as, media_type=None) -> None:
+        """Set where a creator is filed, for every item with that creator. A blank value,
+        or one matching the automatic filing, removes the setting."""
+        key = name_key(name)
+        if not key:
+            return
+        sort_as = " ".join(str(sort_as or "").split())
+        # "Beatles, The" (MusicBrainz style) files the same as automatic "The Beatles".
+        same = lambda a, b: sort_name(re.sub(r",\s*the$", "", a, flags=re.I)) == sort_name(b)
+        if not sort_as or (media_type and same(sort_as, self.automatic_file_under(name, media_type))):
+            self.conn.execute("DELETE FROM sort_names WHERE key = ?", (key,))
+        else:
+            self.conn.execute("INSERT OR REPLACE INTO sort_names (key, sort_as) VALUES (?, ?)", (key, sort_as))
+        self.conn.commit()
+
+    def creators(self, media_type) -> list[dict]:
+        """Every creator of a media type, in filing order, for the Artists page:
+        {name, count, setting, file_under, surname, kind ('band', 'solo' or 'custom'), letter}."""
+        groups: dict[str, dict] = {}
+        for name, n in self.conn.execute(
+                "SELECT creator, COUNT(*) FROM items WHERE media_type = ? AND trim(coalesce(creator, '')) != '' "
+                "GROUP BY creator", (media_type,)):
+            g = groups.setdefault(name_key(name), {"count": 0, "spellings": {}})
+            g["count"] += n
+            g["spellings"][" ".join(name.split())] = g["spellings"].get(" ".join(name.split()), 0) + n
+        overrides = self._sort_overrides()
+        out = []
+        for key, g in groups.items():
+            name = max(g["spellings"], key=g["spellings"].get)
+            setting = overrides.get(key)
+            surname = surname_first(name)
+            filed = setting or self.automatic_file_under(name, media_type)
+            if not setting:
+                kind = "solo" if media_type in PERSON_TYPES else "band"
+            elif sort_name(setting) == sort_name(surname):
+                kind = "solo"
+            else:
+                kind = "custom"
+            first = sort_name(filed)[:1].upper()
+            out.append({"name": name, "count": g["count"], "setting": setting, "file_under": filed,
+                        "surname": surname, "kind": kind, "one_word": surname == name,
+                        "letter": first if first.isalpha() else "#", "_key": sort_name(filed)})
+        out.sort(key=lambda c: (c["letter"] == "#", c["_key"]))
+        return out
+
+    def file_under_key(self, item, overrides=None) -> str:
+        name = item.get("creator")
+        overrides = self._sort_overrides() if overrides is None else overrides
+        filed = overrides.get(name_key(name)) or self.automatic_file_under(name, item["media_type"])
+        return sort_name(filed)
 
     def copy_values(self, field, media_type=None) -> list[dict]:
         """Every distinct value used for a copy field (e.g. all your locations), with

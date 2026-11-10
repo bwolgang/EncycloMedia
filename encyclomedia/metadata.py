@@ -59,7 +59,8 @@ def _year(text):
 
 def _candidate(media_type, title, source, extra=None, **fields):
     return {"media_type": media_type, "title": title, "source": source,
-            "creator": fields.get("creator"), "year": fields.get("year"),
+            "creator": fields.get("creator"), "creator_sort": fields.get("creator_sort"),
+            "year": fields.get("year"),
             "genre": fields.get("genre"), "format": fields.get("format"),
             "notes": fields.get("notes"),
             "extra": {k: v for k, v in (extra or {}).items() if v not in (None, "", [])}}
@@ -250,9 +251,12 @@ def parse_musicbrainz_release(r: dict) -> dict:
     label_info = r.get("label-info") or []
     tracks = [t.get("title") for m in media for t in m.get("tracks", []) if t.get("title")]
     artist, performers = _artist_credit(r.get("artist-credit"))
+    # MusicBrainz files people by surname ("Bush, Kate") and bands as named ("Pink Floyd").
+    main = [c for c in (r.get("artist-credit") or []) if c.get("name") and artist and c["name"] in artist]
+    artist_sort = ((main[0].get("artist") or {}).get("sort-name") if len(main) == 1 else None)
     return _candidate(
         "music", r.get("title"), "MusicBrainz",
-        creator=artist,
+        creator=artist, creator_sort=artist_sort,
         year=_year((r.get("release-group") or {}).get("first-release-date")),
         genre=", ".join(g["name"] for g in (r.get("genres") or [])[:3]) or None,
         format=media[0].get("format") if media else None,

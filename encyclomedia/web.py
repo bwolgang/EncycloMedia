@@ -12,7 +12,7 @@ from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_t
                    send_file, url_for)
 
 from . import autofill, covers, metadata
-from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, CREDIT_FIELDS, CREDIT_LABELS, split_names, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
+from .catalog import COPY_FIELDS, COPY_LABELS, CORE_FIELDS, CREATOR_LABEL, CREDIT_FIELDS, CREDIT_LABELS, split_names, name_key, surname_first, YEAR_LABEL, DB_DEFAULT, EXTRA_FIELDS, MEDIA_TYPES, Catalog, genre_key, split_genres
 
 FIELD_LABELS = {"isbn": "ISBN", "upc": "UPC", "edition_year": "Edition year (your copy)", "cover_url": "Cover image URL", "tracklist": "Track list",
                 "discs": "Discs", "players": "Players"}
@@ -225,6 +225,22 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
             flash("Cover removed.", "ok")
         return redirect(url_for("item", item_id=item_id))
 
+    def save_file_under(cat, media_type, creator, previous_creator=None):
+        """Store the form's File-under name for this creator (shared by all their items).
+        A blank box clears the setting only when editing the same creator, so adding
+        another album by an artist never undoes how they're already filed."""
+        if "file_under" not in request.form or not (creator or "").strip():
+            return
+        value = request.form.get("file_under", "").strip()
+        same_creator = previous_creator is not None and name_key(previous_creator) == name_key(creator)
+        if value or same_creator:
+            cat.set_file_under(creator, value, media_type)
+
+    def file_under_context(cat, item):
+        creator, media_type = item.get("creator") or "", item.get("media_type") or "book"
+        return {"file_under": cat.file_under_setting(creator) or "" if creator else "",
+                "file_under_auto": cat.automatic_file_under(creator, media_type) if creator else ""}
+
     def form_to_item():
         f = request.form
         media_type = f.get("media_type", "")
@@ -279,6 +295,30 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                                genre_options=genre_options, mode="hybrid" if semantic else "keyword",
                                counts=cat.counts(), suggestions=suggestions)
 
+    @app.route("/artists", methods=["GET", "POST"])
+    def artists_page():
+        """Every music artist in one list, to choose how each is filed: as written
+        (bands), by surname (solo artists), or a custom File-under name."""
+        cat = catalog()
+        if request.method == "POST":
+            changed = 0
+            for i in range(request.form.get("count", 0, type=int)):
+                name = request.form.get(f"name_{i}", "")
+                kind = request.form.get(f"kind_{i}", "band")
+                value = {"band": "", "solo": surname_first(name),
+                         "custom": request.form.get(f"custom_{i}", "").strip()}.get(kind, "")
+                before = cat.file_under(name, "music")
+                cat.set_file_under(name, value, "music")
+                changed += cat.file_under(name, "music") != before
+            flash(f"Saved. {changed} artist{'s' if changed != 1 else ''} re-filed." if changed
+                  else "Saved. Nothing changed.", "ok")
+            return redirect(url_for("artists_page"))
+        artists = cat.creators("music")
+        for n, a in enumerate(artists):
+            a["i"] = n  # form field number for this artist
+        return render_template("artists.html", artists=artists,
+                               solo_count=sum(a["kind"] == "solo" and not a["one_word"] for a in artists))
+
     @app.get("/genres")
     def genres_page():
         cat = catalog()
@@ -313,6 +353,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                 flash(str(e), "error")
                 item = {"media_type": media_type, **core, "extra": extra, "genres": split_genres(core["genre"])}
                 return render_template("form.html", item=item, **genre_context()), 400
+            save_file_under(catalog(), media_type, core.get("creator"))
             if not apply_cover_upload(item_id):
                 return redirect(url_for("edit", item_id=item_id))  # item saved; let them retry the image
             flash(f"Added “{core['title'].strip()}”.", "ok")
@@ -326,7 +367,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
             item["copy_of"] = source["title"]
         else:
             item = {"media_type": request.args.get("type", "book"), "extra": {}, "genres": []}
-        return render_template("form.html", item=item, **genre_context())
+        return render_template("form.html", item=item, **genre_context(), **file_under_context(catalog(), item))
 
     @app.get("/item/<int:item_id>")
     def item(item_id):
@@ -348,11 +389,12 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
             except ValueError as e:
                 flash(str(e), "error")
                 return redirect(url_for("edit", item_id=item_id))
+            save_file_under(cat, media_type, core.get("creator"), previous_creator=current.get("creator") or "")
             if not apply_cover_upload(item_id):
                 return redirect(url_for("edit", item_id=item_id))
             flash(f"Saved “{core['title'].strip()}”.", "ok")
             return redirect(url_for("index"))
-        return render_template("form.html", item=current, **genre_context())
+        return render_template("form.html", item=current, **genre_context(), **file_under_context(cat, current))
 
     @app.post("/item/<int:item_id>/delete")
     def delete(item_id):
@@ -410,6 +452,16 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                                                 semantic=request.args.get("mode") != "keyword",
                                                 genre=request.args.getlist("genre") or None,
                                                 genre_match=request.args.get("match", "any")))
+
+    @app.get("/api/file-under")
+    def api_file_under():
+        """How a creator is filed: their setting (if any), the automatic filing, and the
+        surname-first form used by the form's "Solo artist" button."""
+        cat, name = catalog(), request.args.get("name", "")
+        media_type = request.args.get("type") if request.args.get("type") in MEDIA_TYPES else "book"
+        return jsonify(setting=cat.file_under_setting(name) if name.strip() else None,
+                       automatic=cat.automatic_file_under(name, media_type) if name.strip() else "",
+                       surname=surname_first(name))
 
     @app.get("/api/genres")
     def api_genres():
