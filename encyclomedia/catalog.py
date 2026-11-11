@@ -24,6 +24,7 @@ import re
 import sqlite3
 import unicodedata
 import uuid
+from datetime import date
 from pathlib import Path
 
 from . import covers
@@ -122,6 +123,17 @@ CREATE TABLE IF NOT EXISTS sort_names (
     key     TEXT PRIMARY KEY,   -- name_key(creator)
     sort_as TEXT NOT NULL
 );
+-- Circulation: every time an item is lent out. returned_on is empty while it's out.
+CREATE TABLE IF NOT EXISTS loans (
+    id          INTEGER PRIMARY KEY,
+    item_id     INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    borrower    TEXT NOT NULL,
+    loaned_on   TEXT NOT NULL,      -- YYYY-MM-DD
+    due_on      TEXT,               -- optional
+    returned_on TEXT,               -- empty while on loan
+    notes       TEXT
+);
+CREATE INDEX IF NOT EXISTS loans_by_item ON loans(item_id);
 """
 
 FTS_SCHEMA = """
@@ -642,6 +654,106 @@ class Catalog:
             items.sort(key=lambda it: (not it.get("creator"), self.file_under_key(it, overrides),
                                        it.get("year") is None, it.get("year") or 0, sort_name(it["title"])))
         return items
+
+    # ------------------------------------------------------------------ circulation (loans)
+    @staticmethod
+    def _date(value, label, default_today=True) -> str | None:
+        """Accept a date or 'YYYY-MM-DD' (blank: today, or None if not defaulted)."""
+        if isinstance(value, date):
+            return value.isoformat()
+        text = str(value or "").strip()
+        if not text:
+            return date.today().isoformat() if default_today else None
+        try:
+            return date.fromisoformat(text).isoformat()
+        except ValueError:
+            raise ValueError(f"{label} must be a date like 2026-11-10, not {text!r}.") from None
+
+    @staticmethod
+    def _loan_dict(row) -> dict:
+        loan = dict(row)
+        today = date.today()
+        start = date.fromisoformat(loan["loaned_on"])
+        end = date.fromisoformat(loan["returned_on"]) if loan["returned_on"] else today
+        loan["days"] = max((end - start).days, 0)
+        loan["out"] = not loan["returned_on"]
+        loan["overdue"] = bool(loan["out"] and loan["due_on"] and date.fromisoformat(loan["due_on"]) < today)
+        return loan
+
+    def current_loan(self, item_id) -> dict | None:
+        """The open loan for an item, or None if it's on the shelf."""
+        row = self.conn.execute("SELECT * FROM loans WHERE item_id = ? AND returned_on IS NULL "
+                                "ORDER BY loaned_on DESC, id DESC LIMIT 1", (item_id,)).fetchone()
+        return self._loan_dict(row) if row else None
+
+    def loan_history(self, item_id) -> list[dict]:
+        """Every loan of an item, most recent first (including the current one)."""
+        rows = self.conn.execute("SELECT * FROM loans WHERE item_id = ? ORDER BY loaned_on DESC, id DESC",
+                                 (item_id,))
+        return [self._loan_dict(r) for r in rows]
+
+    def lend(self, item_id, borrower, loaned_on=None, due_on=None, notes=None) -> int:
+        """Record that an item has been lent out. Raises ValueError if it's already out."""
+        if self.get(item_id) is None:
+            raise ValueError(f"No item with id {item_id}")
+        borrower = " ".join(str(borrower or "").split())
+        if not borrower:
+            raise ValueError("Enter who is borrowing it.")
+        current = self.current_loan(item_id)
+        if current:
+            raise ValueError(f"It's already on loan to {current['borrower']}. Mark it returned first.")
+        loaned = self._date(loaned_on, "The loan date")
+        due = self._date(due_on, "The due date", default_today=False)
+        if due and due < loaned:
+            raise ValueError("The due date can't be before the loan date.")
+        cur = self.conn.execute(
+            "INSERT INTO loans (item_id, borrower, loaned_on, due_on, notes) VALUES (?, ?, ?, ?, ?)",
+            (item_id, borrower, loaned, due, _clean(notes)))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def return_item(self, item_id, returned_on=None) -> dict:
+        """Mark an item's current loan as returned. Returns the finished loan."""
+        current = self.current_loan(item_id)
+        if not current:
+            raise ValueError("It isn't on loan.")
+        returned = self._date(returned_on, "The return date")
+        if returned < current["loaned_on"]:
+            raise ValueError("The return date can't be before the day it was lent.")
+        self.conn.execute("UPDATE loans SET returned_on = ? WHERE id = ?", (returned, current["id"]))
+        self.conn.commit()
+        return self._loan_dict(self.conn.execute("SELECT * FROM loans WHERE id = ?", (current["id"],)).fetchone())
+
+    def delete_loan(self, loan_id) -> int | None:
+        """Remove a loan record entered by mistake. Returns its item's id."""
+        row = self.conn.execute("SELECT item_id FROM loans WHERE id = ?", (loan_id,)).fetchone()
+        if row is None:
+            return None
+        self.conn.execute("DELETE FROM loans WHERE id = ?", (loan_id,))
+        self.conn.commit()
+        return row["item_id"]
+
+    def loans_out(self) -> list[dict]:
+        """Everything currently on loan, oldest loan first, each with its item."""
+        rows = self.conn.execute("SELECT * FROM loans WHERE returned_on IS NULL ORDER BY loaned_on, id")
+        return [{**self._loan_dict(r), "item": self.get(r["item_id"])} for r in rows]
+
+    def recent_returns(self, limit=10) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM loans WHERE returned_on IS NOT NULL "
+                                 "ORDER BY returned_on DESC, id DESC LIMIT ?", (limit,))
+        return [{**self._loan_dict(r), "item": self.get(r["item_id"])} for r in rows]
+
+    def current_loans_by_item(self) -> dict[int, dict]:
+        """{item_id: open loan}, for marking items "On loan" in lists."""
+        rows = self.conn.execute("SELECT * FROM loans WHERE returned_on IS NULL")
+        return {r["item_id"]: self._loan_dict(r) for r in rows}
+
+    def borrowers(self) -> list[str]:
+        """Everyone you've lent to, most recent first (for autocomplete)."""
+        names = {}
+        for (name,) in self.conn.execute("SELECT borrower FROM loans ORDER BY loaned_on DESC, id DESC"):
+            names.setdefault(name_key(name), name)
+        return list(names.values())
 
     # ------------------------------------------------------------------ filing creators
     def _sort_overrides(self) -> dict[str, str]:

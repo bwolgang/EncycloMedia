@@ -79,6 +79,7 @@
   <nav>
     <a href="{{ url_for('genres_page') }}">Genres</a>
     <a href="{{ url_for('artists_page') }}">Artists</a>
+    <a href="{{ url_for('loans_page') }}">Loans</a>
     <a href="{{ url_for('add', type=tab) if tab in TYPE_SLUG else url_for('add') }}">Add item</a>
     <a class="wide" href="{{ url_for('export_csv', type=tab) if tab in TYPE_SLUG else url_for('export_csv') }}">Export CSV</a>
   </nav>

@@ -1492,3 +1492,100 @@ def test_cli_import_skips_duplicates(tmp_path, capsys):
     main(["--db", db, "--no-semantic", "import", "--no-autofill", str(csv_path)])
     out = capsys.readouterr().out
     assert "Imported 0 items." in out and "Skipped 1 already in the catalog" in out and "Abbey Road" in out
+
+
+# --------------------------------------------------------------------------- circulation
+from datetime import date, timedelta  # noqa: E402
+
+
+def test_lending_and_returning(tmp_path):
+    cat = Catalog(tmp_path / "loans.db")
+    swim = cat.add("music", "Swimming", creator="Mac Miller")
+    assert cat.current_loan(swim) is None
+    cat.lend(swim, "  Conor ", "2026-11-10", due_on="2026-11-24", notes="after band practice")
+    loan = cat.current_loan(swim)
+    assert (loan["borrower"], loan["loaned_on"], loan["due_on"], loan["out"]) == ("Conor", "2026-11-10", "2026-11-24", True)
+    with pytest.raises(ValueError, match="already on loan to Conor"):
+        cat.lend(swim, "Sam")
+    with pytest.raises(ValueError, match="before the day it was lent"):
+        cat.return_item(swim, "2026-11-01")
+    done = cat.return_item(swim, "2026-11-24")
+    assert (done["returned_on"], done["days"], done["out"]) == ("2026-11-24", 14, False)
+    assert cat.current_loan(swim) is None
+    with pytest.raises(ValueError, match="isn't on loan"):
+        cat.return_item(swim)
+
+    cat.lend(swim, "Sam", "2026-12-01")                     # a second loan; history keeps both
+    history = cat.loan_history(swim)
+    assert [l["borrower"] for l in history] == ["Sam", "Conor"] and history[0]["out"]
+    assert cat.borrowers() == ["Sam", "Conor"]
+    assert [l["item"]["title"] for l in cat.loans_out()] == ["Swimming"]
+    assert cat.recent_returns()[0]["borrower"] == "Conor"
+
+    with pytest.raises(ValueError, match="who is borrowing"):
+        cat.lend(cat.add("book", "Dune"), "  ")
+    with pytest.raises(ValueError, match="like 2026-11-10"):
+        cat.lend(cat.add("book", "Emma"), "Ann", "11/10/2026")
+    assert cat.remove(swim) and cat.loans_out() == []          # deleting an item deletes its loans
+
+
+def test_overdue_and_days():
+    today = date.today()
+    cat = Catalog(":memory:")
+    a = cat.add("movie", "Arrival")
+    cat.lend(a, "Pat", (today - timedelta(days=20)).isoformat(), due_on=(today - timedelta(days=6)).isoformat())
+    loan = cat.current_loan(a)
+    assert loan["overdue"] and loan["days"] == 20
+
+
+def test_circulation_on_details_page(tmp_path):
+    app = create_app(tmp_path / "web.db")
+    app.testing = True
+    client = app.test_client()
+    cat = Catalog(tmp_path / "web.db")
+    swim = cat.add("music", "Swimming", creator="Mac Miller", extra={"location": "Record shelf"})
+    page = client.get(f"/item/{swim}").get_data(as_text=True)
+    assert "<h2>Circulation</h2>" in page and "<b>Available</b>" in page and "Lend it out" in page
+
+    resp = client.post(f"/item/{swim}/lend", data={"borrower": "Conor", "loaned_on": "2026-11-10",
+                                                   "due_on": "", "notes": ""})
+    assert resp.headers["Location"] == f"/item/{swim}#circulation"
+    page = client.get(f"/item/{swim}").get_data(as_text=True)
+    assert "Lent “Swimming” to Conor." in page and "<b>On loan to Conor</b>" in page
+    assert "Since Nov 10, 2026" in page and "Mark returned" in page and "Still out" in page
+    # Shown on the Music page and the Loans page.
+    assert "On loan to Conor" in client.get("/music").get_data(as_text=True)
+    loans = client.get("/loans").get_data(as_text=True)
+    assert "1 item on loan" in " ".join(loans.split()) and "Swimming" in loans and "Conor" in loans
+
+    # Returned from the Loans page: goes back there, and the history keeps the record.
+    resp = client.post(f"/item/{swim}/return", data={"returned_on": "2026-11-24", "next": "/loans"})
+    assert resp.headers["Location"] == "/loans"
+    page = client.get(f"/item/{swim}").get_data(as_text=True)
+    assert "<b>Available</b>" in page
+    assert re.search(r"<td>Conor</td>\s*<td>Nov 10, 2026</td>\s*<td>\s*Nov 24, 2026</td>\s*<td class=\"num\">14</td>", page)
+    assert "Lent 1 time." in page
+    assert "Nothing is out on loan." in client.get("/loans").get_data(as_text=True)
+    assert "Recently returned" in client.get("/loans").get_data(as_text=True)
+
+    # Mistakes: lending to nobody is refused; a record can be deleted.
+    client.post(f"/item/{swim}/lend", data={"borrower": "", "loaned_on": "2026-11-25"})
+    assert "Enter who is borrowing it." in client.get(f"/item/{swim}").get_data(as_text=True)
+    loan_id = cat.loan_history(swim)[0]["id"]
+    assert client.post(f"/loan/{loan_id}/delete").headers["Location"] == f"/item/{swim}#circulation"
+    assert cat.loan_history(swim) == []
+    assert 'href="/loans">Loans</a>' in client.get("/").get_data(as_text=True)
+
+
+def test_cli_lend_return(tmp_path, capsys):
+    from encyclomedia.__main__ import main
+    db = str(tmp_path / "cli.db")
+    main(["--db", db, "--no-semantic", "add", "music", "Swimming", "--creator", "Mac Miller"])
+    main(["--db", db, "--no-semantic", "lend", "1", "Conor", "--date", "2026-11-10", "--due", "2026-11-24"])
+    main(["--db", db, "--no-semantic", "loans"])
+    out = capsys.readouterr().out
+    assert "Lent “Swimming” to Conor." in out and "Swimming - Conor since 2026-11-10, due 2026-11-24" in out
+    main(["--db", db, "--no-semantic", "return", "1", "--date", "2026-11-24"])
+    assert "back from Conor after 14 days" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="isn't on loan"):
+        main(["--db", db, "--no-semantic", "return", "1"])

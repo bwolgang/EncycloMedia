@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import re
+from datetime import date
 from urllib.parse import quote_plus
 
 from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_template, request,
@@ -129,6 +130,14 @@ def short_list(names, limit=4) -> str:
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
+def nice_date(iso) -> str:
+    """'2026-11-10' -> 'Nov 10, 2026'."""
+    if not iso:
+        return ""
+    d = date.fromisoformat(str(iso)[:10])
+    return f"{d:%b} {d.day}, {d.year}"
+
+
 def split_list(value, sep) -> list[str]:
     return [part.strip() for part in re.split(rf"\s*{re.escape(sep)}\s*|\n", str(value or "")) if part.strip()]
 
@@ -156,7 +165,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     app = Flask(__name__)
     app.config.update(DB_PATH=str(db_path), SECRET_KEY="encyclomedia-local",
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
-    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url, item_summary=item_summary, genre_toggle_url=genre_toggle_url,
+    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url, nice_date=nice_date, item_summary=item_summary, genre_toggle_url=genre_toggle_url,
                                  genre_key=genre_key,
                                  TYPE_SLUG=TYPE_SLUG, TYPE_TITLE=TYPE_TITLE, ITEM_NOUN=ITEM_NOUN,
                                  MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
@@ -298,9 +307,10 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         else:
             items = cat.list(media_type, genres, location=location, origin=origin, sort=sort,
                              genre_match=genre_match)
+        loans = cat.current_loans_by_item()
         genre_options = cat.genres(media_type)
         needing = len(autofill.books_needing_details(cat)) if media_type == "book" else 0
-        return render_template("index.html", items=items, q=q, media_type=media_type,
+        return render_template("index.html", items=items, q=q, media_type=media_type, loans=loans,
                                genres=genres, genre_match=genre_match,
                                selected_keys={genre_key(g) for g in genres},
                                books_needing_details=needing,
@@ -401,7 +411,49 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         current = cat.get(item_id) or abort(404)
         return render_template("detail.html", item=current, details=detail_rows(current),
                                copy_details=copy_rows(current), credits=credit_rows(current),
-                               links=external_links(current), related=cat.similar(item_id))
+                               links=external_links(current), related=cat.similar(item_id),
+                               loan=cat.current_loan(item_id), loan_history=cat.loan_history(item_id),
+                               borrowers=cat.borrowers(), today=date.today().isoformat())
+
+    # ---------------------------------------------------------------- circulation
+    @app.post("/item/<int:item_id>/lend")
+    def lend(item_id):
+        cat = catalog()
+        item = cat.get(item_id) or abort(404)
+        f = request.form
+        try:
+            cat.lend(item_id, f.get("borrower"), f.get("loaned_on"), f.get("due_on"), f.get("notes"))
+            flash(f"Lent “{item['title']}” to {' '.join(f.get('borrower', '').split())}.", "ok")
+        except ValueError as e:
+            flash(str(e), "error")
+        return redirect(url_for("item", item_id=item_id) + "#circulation")
+
+    @app.post("/item/<int:item_id>/return")
+    def return_item(item_id):
+        cat = catalog()
+        item = cat.get(item_id) or abort(404)
+        try:
+            loan = cat.return_item(item_id, request.form.get("returned_on"))
+            flash(f"“{item['title']}” is back from {loan['borrower']} after {loan['days']} "
+                  f"day{'s' if loan['days'] != 1 else ''}.", "ok")
+        except ValueError as e:
+            flash(str(e), "error")
+        back = request.form.get("next")
+        return redirect(back if back == url_for("loans_page") else url_for("item", item_id=item_id) + "#circulation")
+
+    @app.post("/loan/<int:loan_id>/delete")
+    def delete_loan(loan_id):
+        item_id = catalog().delete_loan(loan_id)
+        if item_id is None:
+            abort(404)
+        flash("Loan record deleted.", "ok")
+        return redirect(url_for("item", item_id=item_id) + "#circulation")
+
+    @app.get("/loans")
+    def loans_page():
+        cat = catalog()
+        return render_template("loans.html", out=cat.loans_out(), returned=cat.recent_returns(15),
+                               today=date.today().isoformat())
 
     @app.route("/item/<int:item_id>/edit", methods=["GET", "POST"])
     def edit(item_id):

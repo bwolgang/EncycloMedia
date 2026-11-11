@@ -15,6 +15,7 @@ Command line interface.   python -m encyclomedia <command> ...
   locations      list storage locations (or --origins) with item counts
   genre-rename   rename a genre everywhere (or merge it into another)
   genre-remove   take a genre off every item
+  lend     record lending an item; return records it coming back; loans lists what's out
   reindex  build embeddings for semantic search
   serve    start the web interface
 """
@@ -163,6 +164,19 @@ def main(argv=None):
 
     ri = sub.add_parser("reindex", help="build semantic-search embeddings")
     ri.add_argument("--force", action="store_true", help="recompute every item")
+
+    ln = sub.add_parser("lend", help="record lending an item to someone")
+    ln.add_argument("id", type=int)
+    ln.add_argument("borrower")
+    ln.add_argument("--date", help="day it was lent, YYYY-MM-DD (default today)")
+    ln.add_argument("--due", help="day it's due back, YYYY-MM-DD")
+    ln.add_argument("--note")
+
+    rt = sub.add_parser("return", help="record an item coming back")
+    rt.add_argument("id", type=int)
+    rt.add_argument("--date", help="day it came back, YYYY-MM-DD (default today)")
+
+    sub.add_parser("loans", help="list everything currently on loan")
 
     sv = sub.add_parser("serve", help="start the web interface")
     sv.add_argument("--host", default="127.0.0.1")
@@ -327,6 +341,22 @@ def main(argv=None):
                 print(f"Wrote {args.csv_path}")
             else:
                 print(text, end="")
+
+        elif args.cmd == "lend":
+            cat.lend(args.id, args.borrower, args.date, args.due, args.note)
+            print(f"Lent “{cat.get(args.id)['title']}” to {args.borrower}.")
+
+        elif args.cmd == "return":
+            loan = cat.return_item(args.id, args.date)
+            print(f"“{cat.get(args.id)['title']}” is back from {loan['borrower']} after {loan['days']} days.")
+
+        elif args.cmd == "loans":
+            out = cat.loans_out()
+            for l in out:
+                due = f", due {l['due_on']}" + (" (OVERDUE)" if l["overdue"] else "") if l["due_on"] else ""
+                print(f"[{l['item']['id']:>4}] {l['item']['title']} - {l['borrower']} since {l['loaned_on']}{due}")
+            if not out:
+                print("Nothing is on loan.")
 
         elif args.cmd == "reindex":
             print(f"Embedded {cat.reindex(force=args.force)} items with {embedder.model_name}.")

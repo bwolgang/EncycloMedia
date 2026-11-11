@@ -39,6 +39,29 @@
   .facts.copy dd a:hover { color: var(--accent); }
   .facts .multiline { white-space: pre-wrap; }
   .empty-copy { font-size: 14px; margin: 0; }
+  .circ-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .status { display: flex; gap: 10px; align-items: flex-start; }
+  .status .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--ok); }
+  .status.out .dot { background: var(--music); }
+  .status.overdue .dot { background: var(--err); }
+  .status.overdue b { color: var(--err); }
+  .status .muted { font-size: 13px; }
+  .circ-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
+  .circ-form label { display: grid; gap: 3px; font-size: 13px; color: var(--muted); flex: 1 1 150px; }
+  .circ-form label.wide { flex-basis: 100%; }
+  .circ-form .hint { font-size: 11px; opacity: .75; }
+  .lend summary { cursor: pointer; color: var(--accent); font-size: 14px; margin-top: 10px; }
+  table.history { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+  .history th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+                color: var(--muted); padding: 6px 6px; border-bottom: 1px solid var(--line); }
+  .history td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .history tr:last-child td { border-bottom: 0; }
+  .history tr.current td { font-weight: 600; }
+  .history .num { text-align: right; }
+  .history .late { color: var(--err); }
+  .history form { margin: 0; }
+  .history .linkish { text-decoration: none; color: var(--muted); }
+  .small { font-size: 12px; margin: 6px 0 0; }
   section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
   section { margin-bottom: 24px; }
   .people { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -171,6 +194,66 @@
         <p class="muted empty-copy">No edition, location, origin or condition recorded yet.
           <a href="{{ url_for('edit', item_id=item.id) }}">Add them</a></p>
       {% endif %}
+    </section>
+
+    <section id="circulation" class="circulation">
+      <h2>Circulation</h2>
+      <div class="circ-box">
+        {% if loan %}
+          <div class="status {{ 'overdue' if loan.overdue else 'out' }}">
+            <span class="dot"></span>
+            <div>
+              <b>On loan to {{ loan.borrower }}</b>
+              <div class="muted">Since {{ nice_date(loan.loaned_on) }} ({{ loan.days }} day{{ '' if loan.days == 1 else 's' }})
+                {% if loan.due_on %} · {{ 'was due' if loan.overdue else 'due back' }} {{ nice_date(loan.due_on) }}{% endif %}
+                {% if loan.notes %} · {{ loan.notes }}{% endif %}</div>
+            </div>
+          </div>
+          <form class="circ-form" method="post" action="{{ url_for('return_item', item_id=item.id) }}">
+            <label>Returned on <input type="date" name="returned_on" value="{{ today }}" min="{{ loan.loaned_on }}" required></label>
+            <button class="primary" type="submit">Mark returned</button>
+          </form>
+        {% else %}
+          <div class="status in"><span class="dot"></span><div><b>Available</b>
+            <div class="muted">{{ 'In your collection' ~ (', ' ~ item.extra.location if item.extra.location else '') }}</div></div></div>
+          <details class="lend" {{ 'open' if not loan_history }}>
+            <summary>Lend it out</summary>
+            <form class="circ-form" method="post" action="{{ url_for('lend', item_id=item.id) }}">
+              <label>Borrower <input name="borrower" list="borrowerList" required autocomplete="off" placeholder="Who's borrowing it?"></label>
+              <label>Lent on <input type="date" name="loaned_on" value="{{ today }}" required></label>
+              <label>Due back <span class="hint">optional</span> <input type="date" name="due_on" min="{{ today }}"></label>
+              <label class="wide">Note <span class="hint">optional</span> <input name="notes" placeholder="e.g. handed over at band practice"></label>
+              <button class="primary" type="submit">Lend</button>
+            </form>
+            <datalist id="borrowerList">{% for b in borrowers %}<option value="{{ b }}">{% endfor %}</datalist>
+          </details>
+        {% endif %}
+
+        {% if loan_history %}
+          <table class="history">
+            <thead><tr><th>Borrower</th><th>Lent</th><th>Returned</th><th class="num">Days</th><th></th></tr></thead>
+            <tbody>
+            {% for l in loan_history %}
+              <tr class="{{ 'current' if l.out }}">
+                <td>{{ l.borrower }}{% if l.notes %}<div class="muted small">{{ l.notes }}</div>{% endif %}</td>
+                <td>{{ nice_date(l.loaned_on) }}</td>
+                <td>{% if l.out %}<span class="{{ 'late' if l.overdue }}">{{ 'Overdue' if l.overdue else 'Still out' }}</span>
+                    {% else %}{{ nice_date(l.returned_on) }}{% endif %}</td>
+                <td class="num">{{ l.days }}</td>
+                <td class="num">
+                  <form method="post" action="{{ url_for('delete_loan', loan_id=l.id) }}"
+                        data-msg="Delete this loan record ({{ l.borrower }}, {{ nice_date(l.loaned_on) }})?"
+                        onsubmit="return confirm(this.dataset.msg)">
+                    <button class="linkish" type="submit" title="Delete this record">✕</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          <p class="muted small">Lent {{ loan_history|length }} time{{ '' if loan_history|length == 1 else 's' }}.</p>
+        {% endif %}
+      </div>
     </section>
 
     {% if item.extra.cast %}

@@ -63,6 +63,20 @@ The tabs along the top switch between **All** and a page for each media type:
 - An item's details page highlights its tab, and its breadcrumb and genre chips lead back to its type page.
 - Older links such as `/?type=book` redirect to the matching page.
 
+### Circulation (lending)
+Each details page has a **Circulation** section showing whether the item is **Available** or **On loan**.
+- **Lend it out:** enter the borrower (names you've lent to before are suggested), the date (today by default),
+  and optionally a due date and a note.
+- **Mark returned:** choose the return date (today by default). The loan moves into the item's history.
+- **History:** every loan is kept, with borrower, date lent, date returned and number of days, e.g. Conor ·
+  Nov 10, 2026 → Nov 24, 2026 · 14 days. A record entered by mistake can be deleted with its ✕.
+- An item can only be lent to one person at a time. Browse lists show "On loan to Conor" in place of its
+  location, in red once it's past its due date.
+- The **Loans** page (header link, `/loans`) lists everything currently out, oldest first, with overdue items
+  highlighted and a **Returned** button for each, plus recent returns.
+- Command line: `lend ID "Conor" [--date] [--due] [--note]`, `return ID [--date]`, and `loans`.
+- Loan history is kept in the database (back up your `.db` file). It isn't part of CSV export.
+
 ### Duplicates
 EncycloMedia notices when you're adding something you already have.
 

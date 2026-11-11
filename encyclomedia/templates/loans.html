@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Loans · EncycloMedia{% endblock %}
+{% block head %}
+<style>
+  h1 { font-family: Georgia, "Times New Roman", serif; font-size: 30px; margin: 0 0 4px; }
+  .stats { font-size: 14px; margin: 0 0 20px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 26px 0 10px; }
+  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+         padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row.overdue { background: color-mix(in srgb, var(--err) 7%, var(--panel)); }
+  .cover { width: 44px; height: 60px; border-radius: 4px; background: var(--line); object-fit: cover; }
+  .row b a { color: inherit; text-decoration: none; }
+  .row b a:hover { color: var(--accent); }
+  .row .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .row .who { font-size: 14px; margin-top: 3px; }
+  .row .late { color: var(--err); font-weight: 600; }
+  .row form { display: flex; gap: 6px; align-items: center; margin: 0; }
+  .row input[type=date] { width: auto; padding: 4px 6px; font-size: 13px; }
+  .row button { padding: 5px 10px; font-size: 13px; white-space: nowrap; }
+  .empty { padding: 28px 16px; text-align: center; background: var(--panel); border: 1px dashed var(--line);
+           border-radius: 10px; font-size: 14px; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: 44px 1fr; }
+    .row form { grid-column: 1 / -1; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Loans</h1>
+{% set overdue = out|selectattr('overdue')|list %}
+<p class="stats muted">
+  {{ out|length }} item{{ '' if out|length == 1 else 's' }} on loan
+  {% if overdue %} · <span style="color: var(--err)">{{ overdue|length }} overdue</span>{% endif %}
+</p>
+
+<h2>On loan now</h2>
+{% if out %}
+<div class="list">
+  {% for l in out %}{% set it = l.item %}
+  <div class="row {{ 'overdue' if l.overdue }}">
+    {% if it.extra.cover_url %}<img class="cover" src="{{ it.extra.cover_url }}" alt="" loading="lazy" onerror="this.removeAttribute('src')">
+    {% else %}<div class="cover"></div>{% endif %}
+    <div>
+      <b><a href="{{ url_for('item', item_id=it.id) }}#circulation">{{ it.title }}</a></b>
+      <div class="sub"><span class="pill t-{{ it.media_type }}" style="font-size:10px">{{ it.media_type }}</span>
+        {{ it.creator or '' }}</div>
+      <div class="who">{{ l.borrower }} · since {{ nice_date(l.loaned_on) }} ({{ l.days }} day{{ '' if l.days == 1 else 's' }})
+        {% if l.due_on %}· <span class="{{ 'late' if l.overdue }}">{{ 'was due' if l.overdue else 'due' }} {{ nice_date(l.due_on) }}</span>{% endif %}</div>
+    </div>
+    <form method="post" action="{{ url_for('return_item', item_id=it.id) }}">
+      <input type="hidden" name="next" value="{{ url_for('loans_page') }}">
+      <input type="date" name="returned_on" value="{{ today }}" min="{{ l.loaned_on }}" aria-label="Returned on" required>
+      <button class="primary" type="submit">Returned</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+  <p class="empty muted">Nothing is out on loan. To lend something, open it and use its Circulation section.</p>
+{% endif %}
+
+{% if returned %}
+<h2>Recently returned</h2>
+<div class="list">
+  {% for l in returned %}{% set it = l.item %}
+  <div class="row">
+    {% if it.extra.cover_url %}<img class="cover" src="{{ it.extra.cover_url }}" alt="" loading="lazy" onerror="this.removeAttribute('src')">
+    {% else %}<div class="cover"></div>{% endif %}
+    <div>
+      <b><a href="{{ url_for('item', item_id=it.id) }}#circulation">{{ it.title }}</a></b>
+      <div class="who">{{ l.borrower }} · {{ nice_date(l.loaned_on) }} → {{ nice_date(l.returned_on) }}
+        ({{ l.days }} day{{ '' if l.days == 1 else 's' }})</div>
+    </div>
+    <span></span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
