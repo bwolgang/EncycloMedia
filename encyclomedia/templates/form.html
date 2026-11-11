@@ -32,6 +32,11 @@
   .chipbox input { border: 0; padding: 3px 2px; width: auto; flex: 1; min-width: 140px; outline: none; }
   .chip button { border: 0; background: none; padding: 0 0 0 2px; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; }
   .chip button:hover { color: var(--err); }
+  .dup-warning { border: 1px solid var(--accent); background: var(--chip); border-radius: 10px;
+                 padding: 12px 14px; margin: 0 0 16px; font-size: 14px; }
+  .dup-warning ul { margin: 6px 0; padding-left: 18px; }
+  .dup-warning li { margin: 2px 0; }
+  .dup-warning p { margin: 6px 0 0; font-size: 13px; }
   .lookup-row { display: flex; gap: 6px; }
   .lookup-row button { flex: none; white-space: nowrap; }
   .cands { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
@@ -61,7 +66,23 @@
   {% elif item.copy_of %}<h1>Add another copy</h1>
   <p class="muted" style="margin:-8px 0 14px;font-size:14px">Copied from “{{ item.copy_of }}”. Fill in what's different about this copy (edition, location, condition, format…), then save.</p>
   {% else %}<h1>Add item</h1>{% endif %}
+  {% if not item.id %}
+  <div class="dup-warning" id="dupWarning" role="status" {{ 'hidden' if not duplicates }}>
+    <b>You already have this.</b>
+    <ul id="dupList">
+      {% for d in duplicates or [] %}
+        <li><a href="{{ url_for('item', item_id=d.id) }}" target="_blank">{{ d.title }}</a>
+          <span class="muted">{{ item_summary(d) }}</span></li>
+      {% endfor %}
+    </ul>
+    <p class="muted">If this is another copy, add it anyway. Setting its format or edition (vinyl vs CD,
+      paperback vs hardcover) tells the copies apart.</p>
+    {% if cover_lost %}<p class="muted"><b>Choose the cover image again</b>: browsers can't keep a chosen file.</p>{% endif %}
+  </div>
+  {% endif %}
   <form method="post" id="itemForm" enctype="multipart/form-data">
+    {% if item.copy_of %}<input type="hidden" name="allow_duplicate" value="1">{% endif %}
+    <input type="hidden" name="allow_duplicate" value="1" id="allowDuplicate" {{ 'disabled' if not duplicates }}>
     <div class="typepick">
       {% for t in MEDIA_TYPES %}
         <label class="t-{{ t }}"><input type="radio" name="media_type" value="{{ t }}" {{ 'checked' if item.media_type == t }}> {{ t|capitalize }}</label>
@@ -154,7 +175,8 @@
     <textarea name="notes" placeholder="Anything else: who's borrowed it, signed copy, memories…">{{ item.notes or '' }}</textarea>
 
     <div class="actions">
-      <button class="primary" type="submit">{{ 'Save' if item.id else 'Add to catalog' }}</button>
+      <button class="primary" type="submit" id="saveBtn">{{ 'Save' if item.id else
+        ('Add anyway' if duplicates else 'Add to catalog') }}</button>
       <a class="btn" href="{{ url_for('item', item_id=item.id) if item.id else url_for('index') }}">Cancel</a>
     </div>
   </form>
@@ -254,6 +276,48 @@ document.getElementById('soloBtn').addEventListener('click', async () => {
   if (fileUnderInfo && fileUnderInfo.surname) fileUnder.value = fileUnderInfo.surname;
 });
 syncType();
+
+{% if not item.id and not item.copy_of %}
+// ---- Already in the catalog? -------------------------------------------------------
+// Checks as you fill in the title, creator, code and copy details. When there's a match,
+// the main button becomes "Add anyway", since you've seen the warning.
+(() => {
+  const box = document.getElementById('dupWarning'), list = document.getElementById('dupList');
+  const allow = document.getElementById('allowDuplicate'), saveBtn = document.getElementById('saveBtn');
+  const field = name => {
+    const t = currentType();
+    const el = form.querySelector(`fieldset[data-type="${t}"] [name="extra__${name}"]`) || form.elements[`extra__${name}`];
+    return el && !el.disabled ? el.value.trim() : '';
+  };
+  let timer = null, last = '';
+  async function check() {
+    const p = new URLSearchParams({type: currentType(), title: form.elements['title'].value.trim(),
+      creator: form.elements['creator'].value.trim(), format: form.elements['format'].value.trim(),
+      isbn: field('isbn'), barcode: field('barcode'), upc: field('upc'), edition: field('edition'),
+      platform: field('platform')});
+    if (p.toString() === last) return;
+    last = p.toString();
+    let matches = [];
+    if (p.get('title')) {
+      try { matches = (await (await fetch(`{{ url_for('api_duplicates') }}?${p}`)).json()).matches; }
+      catch (e) { return; }  // offline: the server still checks when you save
+    }
+    list.replaceChildren(...matches.map(m => {
+      const li = document.createElement('li'), a = document.createElement('a'), s = document.createElement('span');
+      a.href = m.url; a.target = '_blank'; a.textContent = m.title;
+      s.className = 'muted'; s.textContent = ' ' + m.summary;
+      li.append(a, s); return li;
+    }));
+    box.hidden = !matches.length;
+    allow.disabled = !matches.length;
+    saveBtn.textContent = matches.length ? 'Add anyway' : 'Add to catalog';
+  }
+  const soon = () => { clearTimeout(timer); timer = setTimeout(check, 350); };
+  form.addEventListener('input', e => { if (e.target.name && !e.target.closest('.chipbox')) soon(); });
+  form.addEventListener('change', soon);
+  check();
+})();
+{% endif %}
 
 
 // ---- genre chips ----------------------------------------------------------

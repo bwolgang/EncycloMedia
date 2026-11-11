@@ -19,6 +19,7 @@ original single-file script, run with `--db ~/.media_catalog.db` and that databa
 | `catalog.py` | SQLite storage, type-specific fields, multi-genre tagging, BM25 keyword search, hybrid search, CSV import/export |
 | `semantic.py` | Optional sentence-embedding model for meaning-based search |
 | `metadata.py` | Auto-fill from Open Library, MusicBrainz, TMDB, IGDB |
+| `duplicates.py` | Decides when two items are the same (for the add-form warning and CSV import) |
 | `autofill.py` | Fills in books' blank details from their ISBNs (used on CSV import) |
 | `web.py` + `templates/` | Flask web interface |
 | `__main__.py` | Command line interface |
@@ -61,6 +62,23 @@ The tabs along the top switch between **All** and a page for each media type:
 - **Export CSV** on a type page exports just that type (`/export.csv?type=music`).
 - An item's details page highlights its tab, and its breadcrumb and genre chips lead back to its type page.
 - Older links such as `/?type=book` redirect to the matching page.
+
+### Duplicates
+EncycloMedia notices when you're adding something you already have.
+
+- **What counts as the same item** (same media type, and):
+  - the same ISBN or barcode. An ISBN-10 and its ISBN-13 count as the same; or
+  - when there's no code to compare, the same title and creator, ignoring capitals, accents, punctuation and a
+    leading "The". A blank creator matches any creator.
+  - A **different format, edition or game platform** marks a separate copy, not a duplicate: Abbey Road on vinyl
+    and on CD, or Hades on Switch and on PC. So does a different ISBN or barcode (another edition).
+- **Adding by hand:** a warning appears in the form as you type, with a link to the copy you have. The button
+  changes to **Add anyway** if you do want another copy. Without JavaScript, the warning appears when you click
+  Add. **Add another copy** on a details page never warns.
+- **CSV import:** **Skip items I already have** is ticked by default. Rows matching your catalog, or an earlier
+  row of the same file, are skipped and listed afterwards, so importing the same file twice adds nothing.
+  Untick it to import everything. Command line: `import --allow-duplicates`.
+- The rules are in `duplicates.py` if you want to adjust them.
 
 ### Credits
 Each media type has its own credit fields. The main credit is shown first:

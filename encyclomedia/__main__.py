@@ -152,6 +152,8 @@ def main(argv=None):
     im = sub.add_parser("import", help="import CSV (books with an ISBN are filled in from Open Library)")
     im.add_argument("csv_path")
     im.add_argument("--no-autofill", action="store_true", help="don't look up books' ISBNs")
+    im.add_argument("--allow-duplicates", action="store_true",
+                    help="import rows even if the item is already in the catalog")
 
     sub.add_parser("autofill", help="fill in blank details for books that have an ISBN")
 
@@ -299,8 +301,13 @@ def main(argv=None):
             print("Removed." if cat.remove(args.id) else "No item with that id.")
 
         elif args.cmd == "import":
-            ids = []
-            print(f"Imported {cat.import_csv(args.csv_path, ids_out=ids)} items.")
+            ids, skipped = [], []
+            n = cat.import_csv(args.csv_path, ids_out=ids, skip_duplicates=not args.allow_duplicates,
+                               skipped_out=skipped)
+            print(f"Imported {n} items.")
+            if skipped:
+                print(f"Skipped {len(skipped)} already in the catalog (use --allow-duplicates to import them): "
+                      + ", ".join(skipped))
             if not args.no_autofill:
                 summary = autofill.autofill_books(cat, ids).summary(
                     retry_hint="Run `python -m encyclomedia autofill` to try again.")

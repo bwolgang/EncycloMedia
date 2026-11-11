@@ -116,6 +116,19 @@ def sort_options(media_type) -> list[tuple[str, str]]:
     return opts if media_type else [("type", "Media type"), *opts]
 
 
+def item_summary(item: dict) -> str:
+    """'The Beatles · 1969 · vinyl · Record shelf': enough to tell copies apart."""
+    extra = item.get("extra") or {}
+    bits = [item.get("creator"), item.get("year"), item.get("format"), extra.get("platform"),
+            extra.get("edition"), extra.get("location")]
+    return " · ".join(str(b) for b in bits if b)
+
+
+def short_list(names, limit=4) -> str:
+    shown = ", ".join(names[:limit])
+    return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
+
+
 def split_list(value, sep) -> list[str]:
     return [part.strip() for part in re.split(rf"\s*{re.escape(sep)}\s*|\n", str(value or "")) if part.strip()]
 
@@ -143,7 +156,7 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
     app = Flask(__name__)
     app.config.update(DB_PATH=str(db_path), SECRET_KEY="encyclomedia-local",
                       MAX_CONTENT_LENGTH=covers.MAX_UPLOAD_BYTES + 1024 * 1024)
-    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url, genre_toggle_url=genre_toggle_url,
+    app.jinja_env.globals.update(CREDIT_PHRASE=CREDIT_PHRASE, LIST_FIELDS=LIST_FIELDS, split_list=split_list, browse_url=browse_url, item_summary=item_summary, genre_toggle_url=genre_toggle_url,
                                  genre_key=genre_key,
                                  TYPE_SLUG=TYPE_SLUG, TYPE_TITLE=TYPE_TITLE, ITEM_NOUN=ITEM_NOUN,
                                  MEDIA_TYPES=MEDIA_TYPES, EXTRA_FIELDS=EXTRA_FIELDS, COPY_FIELDS=COPY_FIELDS,
@@ -347,6 +360,18 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         if request.method == "POST":
             media_type, core, extra = form_to_item()
             fields = {k: v for k, v in core.items() if k != "title"}
+            # Already in the catalog? Show what's there and let them choose; "Add anyway"
+            # (or coming from "Add another copy") sends allow_duplicate and skips this.
+            if not request.form.get("allow_duplicate") and media_type in MEDIA_TYPES and core["title"].strip():
+                dups = catalog().find_duplicates(media_type, core["title"], core["creator"], extra,
+                                                 format=core["format"])
+                if dups:
+                    item = {"media_type": media_type, **core, "extra": extra, "genres": split_genres(core["genre"])}
+                    upload = request.files.get("cover_file")
+                    ctx = {**genre_context(), **file_under_context(catalog(), item),
+                           "file_under": request.form.get("file_under", "")}
+                    return render_template("form.html", item=item, duplicates=dups,
+                                           cover_lost=bool(upload and upload.filename), **ctx)
             try:
                 item_id = catalog().add(media_type, core["title"], extra=extra, **fields)
             except ValueError as e:
@@ -412,9 +437,13 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
         else:
             cat = catalog()
             text = io.TextIOWrapper(upload.stream, encoding="utf-8-sig", newline="")
-            ids = []
-            n = cat.import_csv(text, ids_out=ids)
+            ids, skipped = [], []
+            n = cat.import_csv(text, ids_out=ids, skip_duplicates=bool(request.form.get("skip_duplicates")),
+                               skipped_out=skipped)
             flash(f"Imported {n} item{'s' if n != 1 else ''}.", "ok")
+            if skipped:
+                flash(f"Skipped {len(skipped)} already in your catalog: {short_list(skipped)}. "
+                      "Untick “Skip items I already have” to import them anyway.", "ok")
             if request.form.get("autofill"):
                 report = autofill.autofill_books(cat, ids)
                 if report.summary():
@@ -452,6 +481,18 @@ def create_app(db_path=DB_DEFAULT, embedder=None) -> Flask:
                                                 semantic=request.args.get("mode") != "keyword",
                                                 genre=request.args.getlist("genre") or None,
                                                 genre_match=request.args.get("match", "any")))
+
+    @app.get("/api/duplicates")
+    def api_duplicates():
+        """Items already in the catalog that the add form's current details would duplicate."""
+        a = request.args
+        media_type = a.get("type") if a.get("type") in MEDIA_TYPES else None
+        if not media_type or not a.get("title", "").strip():
+            return jsonify(matches=[])
+        extra = {k: a.get(k, "") for k in ("isbn", "barcode", "upc", "edition", "platform")}
+        dups = catalog().find_duplicates(media_type, a["title"], a.get("creator"), extra, format=a.get("format"))
+        return jsonify(matches=[{"id": d["id"], "title": d["title"], "summary": item_summary(d),
+                                 "url": url_for("item", item_id=d["id"])} for d in dups])
 
     @app.get("/api/file-under")
     def api_file_under():

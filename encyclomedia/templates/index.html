@@ -226,6 +226,8 @@
   <input type="file" name="file" accept=".csv,text/csv">
   <label class="check"><input type="checkbox" name="autofill" value="1" checked>
     Fill in books' details from their ISBNs</label>
+  <label class="check"><input type="checkbox" name="skip_duplicates" value="1" checked>
+    Skip items I already have</label>
   <button type="submit">Import</button>
   <span class="muted">Header row: media_type, title, and any other field (creator, year, genre, isbn, platform…).
     Separate multiple genres with commas. Books with an ISBN get their cover, edition, publisher and other

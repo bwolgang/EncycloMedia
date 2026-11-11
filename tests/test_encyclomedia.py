@@ -1084,7 +1084,7 @@ def test_cli_import_autofill(tmp_path, monkeypatch, capsys):
     db = str(tmp_path / "cli.db")
     main(["--db", db, "--no-semantic", "import", str(csv_path)])
     assert "Filled in details for 1 book" in capsys.readouterr().out
-    main(["--db", db, "--no-semantic", "import", "--no-autofill", str(csv_path)])
+    main(["--db", db, "--no-semantic", "import", "--no-autofill", "--allow-duplicates", str(csv_path)])
     assert "Filled in" not in capsys.readouterr().out
     main(["--db", db, "--no-semantic", "autofill"])
     assert "Filled in details for 1 book" in capsys.readouterr().out
@@ -1397,3 +1397,98 @@ def test_titles_with_leading_punctuation_sort_into_place(tmp_path):
     page = app.test_client().get("/music").get_data(as_text=True)
     shown = re.findall(r'<h3><a href="/item/\d+">([^<]+)</a></h3>', page)
     assert [html.unescape(t) for t in shown] == expected       # shown exactly as written, in this order
+
+
+# --------------------------------------------------------------------------- duplicates
+from encyclomedia.duplicates import DuplicateIndex, item_code, text_key  # noqa: E402
+
+
+def test_duplicate_rules(tmp_path):
+    cat = Catalog(tmp_path / "d.db")
+    cat.add("music", "Abbey Road", creator="The Beatles", format="vinyl")
+    cat.add("book", "Dune", creator="Frank Herbert", extra={"isbn": "0441172717"})
+    cat.add("game", "Hades", creator="Supergiant Games", extra={"platform": "Switch"})
+    cat.add("movie", "Arrival", creator="Denis Villeneuve", extra={"upc": "025192376323"})
+    dup = lambda *a, **k: [i["title"] for i in cat.find_duplicates(*a, **k)]
+    assert dup("music", "abbey road!", "beatles", format="Vinyl") == ["Abbey Road"]   # spelling differences
+    assert dup("music", "Abbey Road", "The Beatles") == ["Abbey Road"]                # no format given
+    assert dup("music", "Abbey Road", "The Beatles", format="CD") == []               # another copy
+    assert dup("music", "Abbey Road", "George Benson") == []                          # different artist
+    assert dup("book", "Dune (paperback)", None, {"isbn": "978-0-441-17271-9"}) == ["Dune"]  # ISBN-10 = 13
+    assert dup("book", "Dune", "Frank Herbert", {"isbn": "9780441013593"}) == []      # another edition
+    assert dup("game", "Hades", "Supergiant Games", {"platform": "PC"}) == []         # another platform
+    assert dup("movie", "Arrival", None, {"upc": "25192376323"}) == ["Arrival"]       # leading zero
+    assert dup("book", "Abbey Road", "The Beatles") == []                             # other media type
+    assert item_code("book", {"isbn": "0-441-17271-7"}) == "9780441172719"
+    assert text_key('"The Wall"') == "wall" and text_key("Élan") == "elan"
+
+
+def test_import_skips_items_already_in_catalog(tmp_path):
+    cat = Catalog(tmp_path / "i.db")
+    cat.add("music", "Abbey Road", creator="The Beatles", format="vinyl")
+    csv_text = ("media_type,title,creator,format\n"
+                "music,Abbey Road,The Beatles,vinyl\n"        # already have it
+                "music,Abbey Road,The Beatles,CD\n"           # a second copy: imported
+                "music,Revolver,The Beatles,vinyl\n"
+                "music,Revolver,The Beatles,vinyl\n")         # listed twice in the file
+    skipped = []
+    assert cat.import_csv(io.StringIO(csv_text), skip_duplicates=True, skipped_out=skipped) == 2
+    assert skipped == ["Abbey Road", "Revolver"]
+    assert cat.import_csv(io.StringIO(csv_text)) == 4                                  # default: import all
+
+
+def test_web_import_skip_checkbox(tmp_path):
+    app = create_app(tmp_path / "w.db")
+    app.testing = True
+    client = app.test_client()
+    csv_bytes = b"media_type,title,creator\nmusic,Abbey Road,The Beatles\nmusic,Revolver,The Beatles\n"
+    post = lambda **extra: client.post("/import", content_type="multipart/form-data",
+                                       data={"file": (io.BytesIO(csv_bytes), "c.csv"), **extra})
+    post(skip_duplicates="1")
+    post(skip_duplicates="1")                                           # same file again
+    page = client.get("/").get_data(as_text=True)
+    assert "Imported 0 items." in page and "Skipped 2 already in your catalog: Abbey Road, Revolver." in page
+    assert "Skip items I already have" in page
+    post()                                                              # box unticked
+    assert len(Catalog(tmp_path / "w.db").list("music")) == 4
+
+
+def test_add_form_warns_about_duplicates(tmp_path):
+    app = create_app(tmp_path / "f.db")
+    app.testing = True
+    client = app.test_client()
+    form = {"media_type": "music", "title": "Abbey Road", "creator": "The Beatles", "format": "vinyl",
+            "extra__location": "Record shelf"}
+    assert client.post("/add", data=form).headers["Location"] == "/"
+    # Same album again: not saved; the form comes back with a warning and its values kept.
+    resp = client.post("/add", data={**form, "creator": "the beatles"})
+    page = resp.get_data(as_text=True)
+    assert resp.status_code == 200 and "You already have this." in page
+    assert re.search(r'href="/item/1"[^>]*>Abbey Road</a>\s*<span class="muted">The Beatles · vinyl · Record shelf', page)
+    assert 'value="the beatles"' in page and "Add anyway" in page
+    assert len(Catalog(tmp_path / "f.db").list()) == 1
+    # "Add anyway" saves it.
+    assert client.post("/add", data={**form, "allow_duplicate": "1"}).headers["Location"] == "/"
+    assert len(Catalog(tmp_path / "f.db").list()) == 2
+    # A CD copy isn't a duplicate, and "Add another copy" never warns.
+    assert client.post("/add", data={**form, "format": "CD"}).status_code == 302
+    copy_page = client.get("/add?copy=1").get_data(as_text=True)
+    assert '<input type="hidden" name="allow_duplicate" value="1">' in copy_page
+    # The live check used by the form as you type.
+    matches = client.get("/api/duplicates?type=music&title=abbey+road&creator=The+Beatles&format=vinyl").get_json()
+    assert [m["title"] for m in matches["matches"]] == ["Abbey Road", "Abbey Road"]
+    assert client.get("/api/duplicates?type=music&title=Rumours").get_json()["matches"] == []
+    # Editing an item never shows the warning.
+    assert "You already have this." not in client.get("/item/1/edit").get_data(as_text=True)
+
+
+def test_cli_import_skips_duplicates(tmp_path, capsys):
+    from encyclomedia.__main__ import main
+    csv_path = tmp_path / "m.csv"
+    csv_path.write_text("media_type,title,creator\nmusic,Abbey Road,The Beatles\n", encoding="utf-8")
+    db = str(tmp_path / "c.db")
+    main(["--db", db, "--no-semantic", "import", "--no-autofill", str(csv_path)])
+    capsys.readouterr()
+    main(["--db", db, "--no-semantic", "import", "--no-autofill", str(csv_path)])
+    out = capsys.readouterr().out
+    assert "Imported 0 items." in out and "Skipped 1 already in the catalog" in out and "Abbey Road" in out

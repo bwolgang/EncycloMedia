@@ -27,6 +27,7 @@ import uuid
 from pathlib import Path
 
 from . import covers
+from .duplicates import DuplicateIndex
 
 DB_DEFAULT = Path.home() / ".encyclomedia.db"
 SCHEMA_VERSION = 3
@@ -550,15 +551,26 @@ class Catalog:
         self._embed_items(affected)
         return len(affected)
 
-    def import_csv(self, source, ids_out: list | None = None) -> int:
+    def find_duplicates(self, media_type, title, creator=None, extra=None, format=None,
+                        exclude_id=None) -> list[dict]:
+        """Items already in the catalog that this one would duplicate (see duplicates.py)."""
+        return DuplicateIndex(self.list(media_type)).match(
+            media_type, title, creator, extra, format=format, exclude_id=exclude_id)
+
+    def import_csv(self, source, ids_out: list | None = None, skip_duplicates=False,
+                   skipped_out: list | None = None) -> int:
         """Import from a CSV path or file object. Returns how many items were added;
         pass a list as `ids_out` to also get their ids (e.g. to auto-fill them).
+
+        With skip_duplicates, rows matching an item already in the catalog (or an earlier
+        row of the same file) are left out; their titles go in `skipped_out`.
 
         Header must include media_type and title. Other columns may be any core
         field or any type-specific field for that row's type (e.g. isbn, platform).
         """
         f = open(source, newline="", encoding="utf-8") if isinstance(source, (str, Path)) else source
         count = 0
+        index = DuplicateIndex(self.list()) if skip_duplicates else None
         try:
             for raw in csv.DictReader(f):
                 row = {k.strip().lower(): (v or "").strip() for k, v in raw.items() if k}
@@ -567,7 +579,14 @@ class Catalog:
                     continue
                 core = {k: v for k, v in row.items() if k in CORE_FIELDS}
                 extra = {k: v for k, v in row.items() if k in EXTRA_FIELDS[media_type] or k in COPY_FIELDS}
+                if index is not None and index.match(media_type, title, core.get("creator"), extra,
+                                                     format=core.get("format")):
+                    if skipped_out is not None:
+                        skipped_out.append(title)
+                    continue
                 item_id = self.add(media_type, title, extra=extra, **core)
+                if index is not None:
+                    index.add(self.get(item_id))
                 if ids_out is not None:
                     ids_out.append(item_id)
                 count += 1
